@@ -12,6 +12,9 @@ from handspring.types import (
     FrameResult,
     HandFeatures,
     HandState,
+    Joint,
+    PoseLandmark,
+    PoseState,
 )
 
 
@@ -45,7 +48,9 @@ def _frame(
         present=face_present,
         features=FaceFeatures(yaw=0.0, pitch=0.0, mouth_open=0.0) if face_present else None,
     )
-    return FrameResult(left=left, right=right, face=face, fps=30.0)
+    return FrameResult(
+        left=left, right=right, face=face, pose=PoseState(present=False, joints=None), fps=30.0
+    )
 
 
 def test_continuous_features_emitted_every_frame():
@@ -107,3 +112,72 @@ def test_absent_face_emits_present_zero():
     emitter.emit(_frame(face_present=False))
     assert ("/face/present", 0) in fake.sent
     assert "/face/yaw" not in [a for a, _ in fake.sent]
+
+
+def _pose(joints: dict[Joint, PoseLandmark] | None) -> PoseState:
+    return PoseState(present=joints is not None, joints=joints)
+
+
+def _frame_with_pose(pose: PoseState) -> FrameResult:
+    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0)
+    left = HandState(present=True, features=hf, gesture="none")
+    right = HandState(present=True, features=hf, gesture="none")
+    face = FaceState(
+        present=True,
+        features=FaceFeatures(yaw=0.0, pitch=0.0, mouth_open=0.0),
+    )
+    return FrameResult(left=left, right=right, face=face, pose=pose, fps=30.0)
+
+
+def test_pose_present_emits_joint_messages():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    joints: dict[Joint, PoseLandmark] = {
+        "shoulder_left": PoseLandmark(x=0.3, y=0.4, z=0.0, visible=True),
+        "shoulder_right": PoseLandmark(x=0.7, y=0.4, z=0.0, visible=True),
+        "elbow_left": PoseLandmark(x=0.25, y=0.55, z=0.0, visible=True),
+        "elbow_right": PoseLandmark(x=0.75, y=0.55, z=0.0, visible=True),
+        "wrist_left": PoseLandmark(x=0.2, y=0.7, z=0.0, visible=True),
+        "wrist_right": PoseLandmark(x=0.8, y=0.7, z=0.0, visible=True),
+        "hip_left": PoseLandmark(x=0.4, y=0.85, z=0.0, visible=True),
+        "hip_right": PoseLandmark(x=0.6, y=0.85, z=0.0, visible=True),
+    }
+    emitter.emit(_frame_with_pose(_pose(joints)))
+    addresses = [addr for addr, _ in fake.sent]
+    assert ("/pose/present", 1) in fake.sent
+    for joint in joints:
+        assert f"/pose/{joint}/visible" in addresses
+        assert f"/pose/{joint}/x" in addresses
+        assert f"/pose/{joint}/y" in addresses
+        assert f"/pose/{joint}/z" in addresses
+
+
+def test_pose_absent_emits_only_present_zero():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    emitter.emit(_frame_with_pose(_pose(None)))
+    pose_messages = [a for a, _ in fake.sent if a.startswith("/pose/")]
+    assert pose_messages == ["/pose/present"]
+    assert ("/pose/present", 0) in fake.sent
+
+
+def test_pose_joint_invisible_suppresses_xyz():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    joints: dict[Joint, PoseLandmark] = {
+        "shoulder_left": PoseLandmark(x=0.3, y=0.4, z=0.0, visible=True),
+        "shoulder_right": PoseLandmark(x=0.7, y=0.4, z=0.0, visible=False),
+        "elbow_left": PoseLandmark(x=0.25, y=0.55, z=0.0, visible=True),
+        "elbow_right": PoseLandmark(x=0.75, y=0.55, z=0.0, visible=True),
+        "wrist_left": PoseLandmark(x=0.2, y=0.7, z=0.0, visible=True),
+        "wrist_right": PoseLandmark(x=0.8, y=0.7, z=0.0, visible=True),
+        "hip_left": PoseLandmark(x=0.4, y=0.85, z=0.0, visible=True),
+        "hip_right": PoseLandmark(x=0.6, y=0.85, z=0.0, visible=True),
+    }
+    emitter.emit(_frame_with_pose(_pose(joints)))
+    assert ("/pose/shoulder_right/visible", 0) in fake.sent
+    addresses = [addr for addr, _ in fake.sent]
+    assert "/pose/shoulder_right/x" not in addresses
+    assert "/pose/shoulder_right/y" not in addresses
+    assert "/pose/shoulder_right/z" not in addresses
+    assert "/pose/shoulder_left/x" in addresses

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from handspring.types import FaceState, FrameResult, Gesture, HandState, Side
+from handspring.types import (
+    FaceState,
+    FrameResult,
+    Gesture,
+    HandState,
+    PoseState,
+    Side,
+)
 
 
 class _SendsOsc(Protocol):
@@ -37,6 +44,7 @@ class OscEmitter:
         self._emit_hand("left", frame.left)
         self._emit_hand("right", frame.right)
         self._emit_face(frame.face)
+        self._emit_pose(frame.pose)
 
     def _emit_hand(self, side: Side, state: HandState) -> None:
         self._client.send_message(f"/hand/{side}/present", 1 if state.present else 0)
@@ -61,3 +69,15 @@ class OscEmitter:
             self._client.send_message("/face/yaw", float(f.yaw))
             self._client.send_message("/face/pitch", float(f.pitch))
             self._client.send_message("/face/mouth_open", float(f.mouth_open))
+
+    def _emit_pose(self, state: PoseState) -> None:
+        self._client.send_message("/pose/present", 1 if state.present else 0)
+        if not state.present or state.joints is None:
+            return
+        for joint_name, lm in state.joints.items():
+            self._client.send_message(f"/pose/{joint_name}/visible", 1 if lm.visible else 0)
+            if not lm.visible:
+                continue
+            self._client.send_message(f"/pose/{joint_name}/x", float(lm.x))
+            self._client.send_message(f"/pose/{joint_name}/y", float(lm.y))
+            self._client.send_message(f"/pose/{joint_name}/z", float(lm.z))
