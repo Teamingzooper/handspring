@@ -61,6 +61,18 @@ Discrete gesture events (per hand, sent only on state transitions):
 |---|---|---|
 | `/hand/<side>/gesture` | string | `fist` \| `open` \| `point` \| `peace` \| `thumbs_up` \| `none` |
 
+Body pose (continuous per frame when present):
+
+| Address | Type | Range | Notes |
+|---|---|---|---|
+| `/pose/present` | int | 0 or 1 | 1 when a body is detected |
+| `/pose/<joint>/visible` | int | 0 or 1 | per-joint visibility; `0` means unreliable |
+| `/pose/<joint>/x` | float | 0..1 | sent only when `visible=1` |
+| `/pose/<joint>/y` | float | 0..1 | |
+| `/pose/<joint>/z` | float | — | relative depth |
+
+`<joint>` is one of: `shoulder_left`, `shoulder_right`, `elbow_left`, `elbow_right`, `wrist_left`, `wrist_right`, `hip_left`, `hip_right`.
+
 ## CLI flags
 
 ```
@@ -69,6 +81,7 @@ Discrete gesture events (per hand, sent only on state transitions):
 --camera N             camera index (default: 0)
 --no-preview           disable the OpenCV preview window
 --no-face              disable face tracking (hands only)
+--no-pose              disable body/arm pose tracking
 --hands {0,1,2}        max hands to track (default: 2)
 --no-mirror            do not mirror the preview horizontally
 --fps-log-interval SEC print status every N seconds (default: 0.5)
