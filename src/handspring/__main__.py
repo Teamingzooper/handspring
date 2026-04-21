@@ -16,6 +16,9 @@ from numpy.typing import NDArray
 from handspring import __version__
 from handspring.osc_out import OscEmitter
 from handspring.preview import Preview
+from handspring.synth import Synth
+from handspring.synth_params import SynthParams
+from handspring.synth_ui import SynthController
 from handspring.tracker import Tracker, TrackerConfig
 from handspring.types import FrameResult
 
@@ -44,6 +47,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.5,
         help="print FPS + state to terminal every N seconds (default: 0.5)",
     )
+    p.add_argument("--no-synth", action="store_true", help="disable in-process synth audio output")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.set_defaults(mirror=True)
     return p.parse_args(argv)
@@ -77,15 +81,28 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     emitter = OscEmitter(host=args.host, port=args.port)
+    synth_params = SynthParams()
+    synth_controller = SynthController(synth_params)
+    synth: Synth | None = None
+    if not args.no_synth:
+        try:
+            synth = Synth(synth_params)
+            synth.start()
+        except Exception as e:  # noqa: BLE001
+            print(
+                f"warning: could not start synth ({e}); continuing without audio", file=sys.stderr
+            )
+            synth = None
     preview = Preview(mirror=args.mirror) if not args.no_preview else None
     shutdown = _Shutdown()
 
     print(f"handspring {__version__}", flush=True)
     print(f"camera: {args.camera}", flush=True)
     print(f"OSC:    {args.host}:{args.port}", flush=True)
+    synth_status = "off" if args.no_synth or synth is None else "on"
     print(
         f"hands:  {args.hands}   face: {'off' if args.no_face else 'on'}   "
-        f"pose: {'off' if args.no_pose else 'on'}",
+        f"pose: {'off' if args.no_pose else 'on'}   synth: {synth_status}",
         flush=True,
     )
     print("Ctrl+C to quit.", flush=True)
@@ -101,11 +118,16 @@ def main(argv: list[str] | None = None) -> int:
             bgr: NDArray[np.uint8] = bgr_raw  # type: ignore[assignment]
             result = tracker.process(bgr)
             emitter.emit(result)
+            synth_controller.update(result)
+            if not args.no_synth:
+                emitter.emit_synth(synth_params.snapshot())
 
             if preview is not None:
                 hand_landmarks, face_landmarks, pose_landmarks = _extract_landmark_lists(
                     tracker, bgr
                 )
+                snap_for_preview = synth_params.snapshot() if not args.no_synth else None
+                hint_for_preview = synth_controller.ui_hint() if not args.no_synth else None
                 if not preview.render(
                     bgr,
                     hand_landmarks,
@@ -113,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
                     pose_landmarks,
                     result,
                     f"{args.host}:{args.port}",
+                    snap_for_preview,
+                    hint_for_preview,
                 ):
                     break
 
@@ -123,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         cap.release()
         tracker.close()
+        if synth is not None:
+            synth.stop()
         if preview is not None:
             preview.close()
         cv2.destroyAllWindows()
