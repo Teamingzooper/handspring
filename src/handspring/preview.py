@@ -9,6 +9,8 @@ import mediapipe as mp
 import numpy as np
 from numpy.typing import NDArray
 
+from handspring.synth_params import SynthSnapshot
+from handspring.synth_ui import UiHint
 from handspring.types import FrameResult
 
 # MediaPipe connection sets (tuples of (src_idx, dst_idx)).
@@ -49,6 +51,8 @@ class Preview:
         pose_landmarks: Any | None,
         frame_result: FrameResult,
         osc_target: str,
+        synth_snapshot: SynthSnapshot | None,
+        synth_hint: UiHint | None,
     ) -> bool:
         display = bgr_frame.copy()
         if self._mirror:
@@ -86,6 +90,11 @@ class Preview:
             )
 
         _draw_status(display, frame_result, osc_target)
+
+        if synth_snapshot is not None:
+            _draw_synth_panel(display, synth_snapshot)
+        if synth_hint is not None and synth_hint.kind != "none":
+            _draw_synth_hint(display, synth_hint, mirrored=self._mirror)
 
         if not self._created:
             cv2.namedWindow(self.WINDOW_NAME, cv2.WINDOW_NORMAL)
@@ -141,6 +150,116 @@ def _draw_status(frame: NDArray[np.uint8], frame_result: FrameResult, osc_target
             frame, text, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (230, 230, 230), 1, cv2.LINE_AA
         )
         y += 24
+
+
+def _draw_synth_panel(frame: NDArray[np.uint8], snap: SynthSnapshot) -> None:
+    """Lower-left compact synth readout."""
+    h = frame.shape[0]
+    from handspring.synth_ui import _hz_to_note
+
+    mode_text = {
+        "play": "PLAY",
+        "edit_left": "EDIT L",
+        "edit_right": "EDIT R",
+    }[snap.mode]
+    lines = [
+        "-- SYNTH --",
+        f"vol: {snap.volume:.2f}",
+        f"note: {_hz_to_note(snap.note_hz)} ({snap.note_hz:.0f} Hz)",
+        f"step: {snap.stepping_hz:.1f} Hz",
+        f"cutoff: {snap.cutoff_hz:.0f} Hz",
+        f"mod: {snap.mod_depth:.2f} @ {snap.mod_rate:.2f} Hz",
+        f"mode: {mode_text}",
+    ]
+    x = 12
+    y = h - 24 * len(lines) - 12
+    for text in lines:
+        cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4, cv2.LINE_AA)
+        color = (136, 255, 0) if "mode" in text and snap.mode != "play" else (230, 230, 230)
+        cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
+        y += 24
+
+
+def _draw_synth_hint(frame: NDArray[np.uint8], hint: UiHint, *, mirrored: bool) -> None:
+    h, w = frame.shape[:2]
+    # Note: if preview mirrored, hint x was derived from the un-mirrored hand
+    # feature. We need to flip x so it lands where the finger visually is.
+    display_x = (1.0 - hint.x) if mirrored else hint.x
+
+    if hint.kind == "slider":
+        cx = int(display_x * w) + 24
+        cy = int(hint.y * h)
+        _draw_slider(
+            frame, cx=cx, cy=cy, label=hint.label_a, value=hint.value_a, display=hint.display_a
+        )
+    elif hint.kind == "xy":
+        cx = int(display_x * w)
+        cy = int(hint.y * h)
+        _draw_xy(
+            frame,
+            cx=cx,
+            cy=cy,
+            label_x=hint.label_a,
+            display_x=hint.display_a,
+            label_y=hint.label_b,
+            display_y=hint.display_b,
+        )
+
+
+def _draw_slider(
+    frame: NDArray[np.uint8],
+    *,
+    cx: int,
+    cy: int,
+    label: str,
+    value: float,
+    display: str,
+) -> None:
+    height = 140
+    width = 18
+    x0 = cx
+    y0 = cy - height // 2
+    # Track
+    cv2.rectangle(frame, (x0, y0), (x0 + width, y0 + height), (40, 40, 40), -1)
+    cv2.rectangle(frame, (x0, y0), (x0 + width, y0 + height), (136, 255, 0), 2)
+    # Fill (bottom-up)
+    fill_px = int(value * (height - 4))
+    cv2.rectangle(
+        frame,
+        (x0 + 2, y0 + height - 2 - fill_px),
+        (x0 + width - 2, y0 + height - 2),
+        (136, 255, 0),
+        -1,
+    )
+    # Label
+    _label(frame, x0 + width + 6, y0 + 12, label)
+    _label(frame, x0 + width + 6, y0 + height - 4, display)
+
+
+def _draw_xy(
+    frame: NDArray[np.uint8],
+    *,
+    cx: int,
+    cy: int,
+    label_x: str,
+    display_x: str,
+    label_y: str,
+    display_y: str,
+) -> None:
+    h, w = frame.shape[:2]
+    # Full-width horizontal + full-height vertical crosshair.
+    cv2.line(frame, (0, cy), (w, cy), (136, 255, 0), 1, cv2.LINE_AA)
+    cv2.line(frame, (cx, 0), (cx, h), (136, 255, 0), 1, cv2.LINE_AA)
+    # Labels at axis ends.
+    _label(frame, max(8, cx - 80), 20, f"{label_y}: {display_y}")
+    _label(frame, w - 220, cy - 6, f"{label_x}: {display_x}")
+
+
+def _label(frame: NDArray[np.uint8], x: int, y: int, text: str) -> None:
+    cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA)
+    cv2.putText(
+        frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (230, 230, 230), 1, cv2.LINE_AA
+    )
 
 
 def _mirror_landmarks(landmark_list: Any) -> Any:
