@@ -395,3 +395,14 @@ def test_synth_mode_only_on_change():
     emitter.emit_synth(snap("edit_left"))
     modes = [v for a, v in fake.sent if a == "/synth/mode"]
     assert modes == ["play", "edit_left"]
+
+
+def test_index_tip_emitted():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    emitter.emit(_frame())
+    addresses = [addr for addr, _ in fake.sent]
+    assert "/hand/left/index_x" in addresses
+    assert "/hand/left/index_y" in addresses
+    assert "/hand/right/index_x" in addresses
+    assert "/hand/right/index_y" in addresses
