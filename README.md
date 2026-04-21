@@ -1,5 +1,106 @@
 # handspring
 
-Webcam gesture → OSC stream for creative coding.
+Webcam → hand/face tracking → OSC stream.
 
-Full README lands in Task 11 once the app is built.
+Drop-in gesture input for creative-coding projects: audio synths, visuals, game controls, prompt generators. Written in Python, powered by [MediaPipe](https://mediapipe.dev/).
+
+## Quick start
+
+```bash
+# 1. Install (Python 3.10+ required)
+pip install -e '.[dev]'
+# or with uv:
+# uv sync
+
+# 2. Run
+python -m handspring
+```
+
+A preview window opens showing your webcam with hand/face landmarks drawn.
+OSC packets fly out to `127.0.0.1:9000` (UDP). Terminal shows FPS + current
+gesture state.
+
+## Demo
+
+In one terminal:
+
+```bash
+python -m handspring
+```
+
+In another:
+
+```bash
+python examples/tone_synth.py
+```
+
+Move your hands. The synth plays sine tones — left hand Y controls pitch,
+right hand Y controls amplitude. Make a fist with your left hand to mute;
+open your palm to unmute.
+
+## OSC reference
+
+Continuous features (sent every frame, ~30 Hz):
+
+| Address | Type | Range | Notes |
+|---|---|---|---|
+| `/hand/<side>/present` | int | 0 or 1 | `<side>` is `left` or `right` (user's perspective) |
+| `/hand/<side>/x` | float | 0..1 | palm center, normalized to frame width |
+| `/hand/<side>/y` | float | 0..1 | palm center, normalized to frame height |
+| `/hand/<side>/z` | float | — | relative depth |
+| `/hand/<side>/openness` | float | 0..1 | 0 = fist, 1 = open palm |
+| `/hand/<side>/pinch` | float | 0..1 | thumb-index proximity |
+| `/face/present` | int | 0 or 1 | |
+| `/face/yaw` | float | -1..1 | negative = looking left |
+| `/face/pitch` | float | -1..1 | negative = looking down |
+| `/face/mouth_open` | float | 0..1 | |
+
+Discrete gesture events (per hand, sent only on state transitions):
+
+| Address | Type | Values |
+|---|---|---|
+| `/hand/<side>/gesture` | string | `fist` \| `open` \| `point` \| `peace` \| `thumbs_up` \| `none` |
+
+## CLI flags
+
+```
+--host HOST            OSC receiver host (default: 127.0.0.1)
+--port PORT            OSC receiver port (default: 9000)
+--camera N             camera index (default: 0)
+--no-preview           disable the OpenCV preview window
+--no-face              disable face tracking (hands only)
+--hands {0,1,2}        max hands to track (default: 2)
+--no-mirror            do not mirror the preview horizontally
+--fps-log-interval SEC print status every N seconds (default: 0.5)
+```
+
+## Building your own receiver
+
+The OSC stream is the whole point. Any OSC-speaking tool can be a receiver:
+
+- Max/MSP, Pure Data, TouchDesigner — native OSC support
+- SuperCollider — `OSCdef` / `NetAddr`
+- Ableton Live — via `Max for Live` OSC bridge
+- Unity / Godot — via community OSC libraries
+- A Python script — see `examples/tone_synth.py`
+- A web app — bridge OSC to WebSocket
+
+For MIDI-only applications, use a bridge tool (`osculator` on macOS, `loopMIDI`
+on Windows) to forward OSC to MIDI messages.
+
+## Development
+
+```bash
+pip install -e '.[dev]'
+pytest              # run unit tests (no camera required)
+ruff check .        # lint
+ruff format .       # format
+mypy src/           # type check
+```
+
+CI (GitHub Actions) runs the same checks on Ubuntu and macOS with Python
+3.10 and 3.12.
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
