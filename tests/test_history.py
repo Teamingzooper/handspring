@@ -7,7 +7,7 @@ from handspring.types import HandFeatures
 
 
 def _hf(x: float = 0.5, y: float = 0.5, pinch: float = 0.0) -> HandFeatures:
-    return HandFeatures(x=x, y=y, z=0.0, openness=1.0, pinch=pinch)
+    return HandFeatures(x=x, y=y, z=0.0, openness=1.0, pinch=pinch, index_x=x, index_y=y)
 
 
 def test_empty_history_no_samples():

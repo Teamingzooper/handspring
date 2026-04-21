@@ -76,7 +76,18 @@ def hand_features(landmarks: NDArray[np.floating[Any]]) -> HandFeatures:
     # When touching: ~0. When spread: can reach > 1.0× span.
     pinch = float(np.clip(1.0 - (thumb_index_dist / (span * 0.8)), 0.0, 1.0))
 
-    return HandFeatures(x=x, y=y, z=z, openness=openness, pinch=pinch)
+    index_x = float(np.clip(landmarks[INDEX_TIP][0], 0.0, 1.0))
+    index_y = float(np.clip(landmarks[INDEX_TIP][1], 0.0, 1.0))
+
+    return HandFeatures(
+        x=x,
+        y=y,
+        z=z,
+        openness=openness,
+        pinch=pinch,
+        index_x=index_x,
+        index_y=index_y,
+    )
 
 
 def face_features(landmarks: NDArray[np.floating[Any]]) -> FaceFeatures:

@@ -74,3 +74,13 @@ def test_hand_features_reject_nan():
 
     with pytest.raises(ValueError):
         hand_features(bad)
+
+
+def test_hand_features_index_tip_extracted():
+    from tests.fixtures import hand_open
+
+    lm = hand_open()
+    lm[8] = (0.73, 0.21, 0.0)  # INDEX_TIP = landmark 8
+    f = hand_features(lm)
+    assert abs(f.index_x - 0.73) < 1e-6
+    assert abs(f.index_y - 0.21) < 1e-6

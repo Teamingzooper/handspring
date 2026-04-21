@@ -10,7 +10,7 @@ from handspring.types import HandFeatures
 
 
 def _hf(x: float = 0.5, y: float = 0.3, pinch: float = 0.0) -> HandFeatures:
-    return HandFeatures(x=x, y=y, z=0.0, openness=1.0, pinch=pinch)
+    return HandFeatures(x=x, y=y, z=0.0, openness=1.0, pinch=pinch, index_x=x, index_y=y)
 
 
 def _fill(history: HandHistory, samples: list[tuple[float, HandFeatures]]) -> None:
