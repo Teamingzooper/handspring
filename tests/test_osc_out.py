@@ -13,6 +13,7 @@ from handspring.types import (
     HandFeatures,
     HandState,
     Joint,
+    MotionState,
     PoseLandmark,
     PoseState,
 )
@@ -34,22 +35,33 @@ def _frame(
     face_present: bool = True,
 ) -> FrameResult:
     hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0)
+    _m = MotionState(False, False, 0.0, 0.0, None)
     left = HandState(
         present=left_present,
         features=hf if left_present else None,
         gesture=left_gesture,  # type: ignore[arg-type]
+        motion=_m,
     )
     right = HandState(
         present=right_present,
         features=hf if right_present else None,
         gesture=right_gesture,  # type: ignore[arg-type]
+        motion=_m,
     )
     face = FaceState(
         present=face_present,
         features=FaceFeatures(yaw=0.0, pitch=0.0, mouth_open=0.0) if face_present else None,
+        expression="neutral",
+        eye_left_open=0.0,
+        eye_right_open=0.0,
     )
     return FrameResult(
-        left=left, right=right, face=face, pose=PoseState(present=False, joints=None), fps=30.0
+        left=left,
+        right=right,
+        face=face,
+        pose=PoseState(present=False, joints=None),
+        fps=30.0,
+        clap_event=False,
     )
 
 
@@ -120,13 +132,17 @@ def _pose(joints: dict[Joint, PoseLandmark] | None) -> PoseState:
 
 def _frame_with_pose(pose: PoseState) -> FrameResult:
     hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0)
-    left = HandState(present=True, features=hf, gesture="none")
-    right = HandState(present=True, features=hf, gesture="none")
+    _m = MotionState(False, False, 0.0, 0.0, None)
+    left = HandState(present=True, features=hf, gesture="none", motion=_m)
+    right = HandState(present=True, features=hf, gesture="none", motion=_m)
     face = FaceState(
         present=True,
         features=FaceFeatures(yaw=0.0, pitch=0.0, mouth_open=0.0),
+        expression="neutral",
+        eye_left_open=0.0,
+        eye_right_open=0.0,
     )
-    return FrameResult(left=left, right=right, face=face, pose=pose, fps=30.0)
+    return FrameResult(left=left, right=right, face=face, pose=pose, fps=30.0, clap_event=False)
 
 
 def test_pose_present_emits_joint_messages():
@@ -181,3 +197,156 @@ def test_pose_joint_invisible_suppresses_xyz():
     assert "/pose/shoulder_right/y" not in addresses
     assert "/pose/shoulder_right/z" not in addresses
     assert "/pose/shoulder_left/x" in addresses
+
+
+def test_motion_continuous_state_emitted():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0)
+    m = MotionState(pinching=True, dragging=False, drag_dx=0.0, drag_dy=0.0, event=None)
+    left = HandState(present=True, features=hf, gesture="none", motion=m)
+    right = HandState(
+        present=False,
+        features=None,
+        gesture="none",
+        motion=MotionState(False, False, 0.0, 0.0, None),
+    )
+    face = FaceState(
+        present=False,
+        features=None,
+        expression="neutral",
+        eye_left_open=0.0,
+        eye_right_open=0.0,
+    )
+    pose = PoseState(present=False, joints=None)
+    emitter.emit(
+        FrameResult(left=left, right=right, face=face, pose=pose, fps=30.0, clap_event=False)
+    )
+    assert ("/hand/left/pinching", 1) in fake.sent
+    assert ("/hand/left/dragging", 0) in fake.sent
+
+
+def test_motion_event_fires():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0)
+    m = MotionState(pinching=True, dragging=False, drag_dx=0.0, drag_dy=0.0, event="pinch")
+    left = HandState(present=True, features=hf, gesture="none", motion=m)
+    right = HandState(
+        present=False,
+        features=None,
+        gesture="none",
+        motion=MotionState(False, False, 0.0, 0.0, None),
+    )
+    face = FaceState(
+        present=False,
+        features=None,
+        expression="neutral",
+        eye_left_open=0.0,
+        eye_right_open=0.0,
+    )
+    pose = PoseState(present=False, joints=None)
+    emitter.emit(FrameResult(left, right, face, pose, 30.0, False))
+    assert ("/hand/left/event", "pinch") in fake.sent
+
+
+def test_drag_dxdy_only_when_dragging():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0)
+    m = MotionState(pinching=True, dragging=True, drag_dx=0.25, drag_dy=-0.1, event=None)
+    left = HandState(present=True, features=hf, gesture="none", motion=m)
+    right = HandState(
+        present=False,
+        features=None,
+        gesture="none",
+        motion=MotionState(False, False, 0.0, 0.0, None),
+    )
+    face = FaceState(
+        present=False,
+        features=None,
+        expression="neutral",
+        eye_left_open=0.0,
+        eye_right_open=0.0,
+    )
+    emitter.emit(FrameResult(left, right, face, PoseState(False, None), 30.0, False))
+    assert ("/hand/left/drag_dx", 0.25) in fake.sent
+    assert ("/hand/left/drag_dy", -0.1) in fake.sent
+
+
+def test_clap_event_emits():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0)
+    m = MotionState(False, False, 0.0, 0.0, None)
+    left = HandState(present=True, features=hf, gesture="none", motion=m)
+    right = HandState(present=True, features=hf, gesture="none", motion=m)
+    face = FaceState(
+        present=False,
+        features=None,
+        expression="neutral",
+        eye_left_open=0.0,
+        eye_right_open=0.0,
+    )
+    emitter.emit(FrameResult(left, right, face, PoseState(False, None), 30.0, True))
+    assert ("/motion/clap", 1) in fake.sent
+
+
+def test_face_expression_event_on_change():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+
+    def frame(expr):  # type: ignore[no-untyped-def]
+        return FrameResult(
+            left=HandState(
+                present=False,
+                features=None,
+                gesture="none",
+                motion=MotionState(False, False, 0.0, 0.0, None),
+            ),
+            right=HandState(
+                present=False,
+                features=None,
+                gesture="none",
+                motion=MotionState(False, False, 0.0, 0.0, None),
+            ),
+            face=FaceState(
+                present=True,
+                features=FaceFeatures(yaw=0.0, pitch=0.0, mouth_open=0.0),
+                expression=expr,
+                eye_left_open=0.8,
+                eye_right_open=0.8,
+            ),
+            pose=PoseState(False, None),
+            fps=30.0,
+            clap_event=False,
+        )
+
+    emitter.emit(frame("smile"))
+    emitter.emit(frame("smile"))
+    emitter.emit(frame("frown"))
+    exprs = [v for a, v in fake.sent if a == "/face/expression"]
+    assert exprs == ["smile", "frown"]
+
+
+def test_face_eye_open_continuous():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    face = FaceState(
+        present=True,
+        features=FaceFeatures(yaw=0.0, pitch=0.0, mouth_open=0.0),
+        expression="neutral",
+        eye_left_open=0.75,
+        eye_right_open=0.92,
+    )
+    fr = FrameResult(
+        left=HandState(False, None, "none", MotionState(False, False, 0.0, 0.0, None)),
+        right=HandState(False, None, "none", MotionState(False, False, 0.0, 0.0, None)),
+        face=face,
+        pose=PoseState(False, None),
+        fps=30.0,
+        clap_event=False,
+    )
+    emitter.emit(fr)
+    assert ("/face/eye_left_open", 0.75) in fake.sent
+    assert ("/face/eye_right_open", 0.92) in fake.sent

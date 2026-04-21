@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from handspring.types import (
+    Expression,
     FaceState,
     FrameResult,
     Gesture,
@@ -28,7 +29,7 @@ def _make_client(host: str, port: int) -> _SendsOsc:
 
 class OscEmitter:
     """Thin stateful wrapper that emits continuous features every frame and
-    discrete gesture events only on change."""
+    discrete gesture/expression events only on change."""
 
     def __init__(
         self,
@@ -39,12 +40,15 @@ class OscEmitter:
     ) -> None:
         self._client: _SendsOsc = client if client is not None else _make_client(host, port)
         self._last_gesture: dict[Side, Gesture] = {"left": "none", "right": "none"}
+        self._last_expression: Expression = "neutral"
 
     def emit(self, frame: FrameResult) -> None:
         self._emit_hand("left", frame.left)
         self._emit_hand("right", frame.right)
         self._emit_face(frame.face)
         self._emit_pose(frame.pose)
+        if frame.clap_event:
+            self._client.send_message("/motion/clap", 1)
 
     def _emit_hand(self, side: Side, state: HandState) -> None:
         self._client.send_message(f"/hand/{side}/present", 1 if state.present else 0)
@@ -56,7 +60,17 @@ class OscEmitter:
             self._client.send_message(f"/hand/{side}/openness", float(f.openness))
             self._client.send_message(f"/hand/{side}/pinch", float(f.pinch))
 
-        # Gesture events: emit only on state change.
+        # Motion continuous state (always emitted).
+        m = state.motion
+        self._client.send_message(f"/hand/{side}/pinching", 1 if m.pinching else 0)
+        self._client.send_message(f"/hand/{side}/dragging", 1 if m.dragging else 0)
+        if m.dragging:
+            self._client.send_message(f"/hand/{side}/drag_dx", float(m.drag_dx))
+            self._client.send_message(f"/hand/{side}/drag_dy", float(m.drag_dy))
+        if m.event is not None:
+            self._client.send_message(f"/hand/{side}/event", m.event)
+
+        # Static gesture (state-change only).
         current: Gesture = state.gesture
         if current != self._last_gesture[side]:
             self._client.send_message(f"/hand/{side}/gesture", current)
@@ -69,6 +83,15 @@ class OscEmitter:
             self._client.send_message("/face/yaw", float(f.yaw))
             self._client.send_message("/face/pitch", float(f.pitch))
             self._client.send_message("/face/mouth_open", float(f.mouth_open))
+
+        # Eye openness (continuous; emits 0.0 when face absent, which matches default).
+        self._client.send_message("/face/eye_left_open", float(state.eye_left_open))
+        self._client.send_message("/face/eye_right_open", float(state.eye_right_open))
+
+        # Expression (state-change only).
+        if state.expression != self._last_expression:
+            self._client.send_message("/face/expression", state.expression)
+            self._last_expression = state.expression
 
     def _emit_pose(self, state: PoseState) -> None:
         self._client.send_message("/pose/present", 1 if state.present else 0)
