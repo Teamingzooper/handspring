@@ -30,6 +30,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--camera", type=int, default=0, help="camera index (default: 0)")
     p.add_argument("--no-preview", action="store_true", help="disable the OpenCV preview window")
     p.add_argument("--no-face", action="store_true", help="disable face tracking")
+    p.add_argument("--no-pose", action="store_true", help="disable body/arm pose tracking")
     p.add_argument("--hands", type=int, choices=[0, 1, 2], default=2, help="max hands to track")
     p.add_argument(
         "--no-mirror",
@@ -72,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         TrackerConfig(
             max_hands=args.hands,
             track_face=not args.no_face,
+            track_pose=not args.no_pose,
         )
     )
     emitter = OscEmitter(host=args.host, port=args.port)
@@ -81,7 +83,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"handspring {__version__}", flush=True)
     print(f"camera: {args.camera}", flush=True)
     print(f"OSC:    {args.host}:{args.port}", flush=True)
-    print(f"hands:  {args.hands}   face: {'off' if args.no_face else 'on'}", flush=True)
+    print(
+        f"hands:  {args.hands}   face: {'off' if args.no_face else 'on'}   "
+        f"pose: {'off' if args.no_pose else 'on'}",
+        flush=True,
+    )
     print("Ctrl+C to quit.", flush=True)
 
     last_log = 0.0
@@ -97,11 +103,14 @@ def main(argv: list[str] | None = None) -> int:
             emitter.emit(result)
 
             if preview is not None:
-                hand_landmarks, face_landmarks = _extract_landmark_lists(tracker, bgr)
+                hand_landmarks, face_landmarks, pose_landmarks = _extract_landmark_lists(
+                    tracker, bgr
+                )
                 if not preview.render(
                     bgr,
                     hand_landmarks,
                     face_landmarks,
+                    pose_landmarks,
                     result,
                     f"{args.host}:{args.port}",
                 ):
@@ -124,23 +133,22 @@ def main(argv: list[str] | None = None) -> int:
 
 def _extract_landmark_lists(
     tracker: Tracker, bgr: NDArray[np.uint8]
-) -> tuple[list[Any], list[Any]]:
+) -> tuple[list[Any], list[Any], Any | None]:
     """Re-run the underlying MediaPipe solvers so the preview sees the same
-    landmark lists the tracker used.
-
-    The duplication is intentional — MediaPipe's API doesn't expose the raw
-    lists from Tracker without doubling the public surface, and a second pass
-    at the already-available frame is cheap (10-20% of a frame's cost).
-    """
+    landmark lists the tracker used."""
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     rgb.flags.writeable = False
     hand_results = tracker._hands.process(rgb)  # noqa: SLF001
     face_results = (
         tracker._face_mesh.process(rgb) if tracker._face_mesh is not None else None  # noqa: SLF001
     )
+    pose_results = (
+        tracker._pose.process(rgb) if tracker._pose is not None else None  # noqa: SLF001
+    )
     hand_lists = list(hand_results.multi_hand_landmarks or [])
     face_lists = list(face_results.multi_face_landmarks or []) if face_results is not None else []
-    return hand_lists, face_lists
+    pose_landmarks = pose_results.pose_landmarks if pose_results is not None else None
+    return hand_lists, face_lists, pose_landmarks
 
 
 def _print_status(result: FrameResult) -> None:

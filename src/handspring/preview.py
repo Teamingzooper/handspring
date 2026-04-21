@@ -1,4 +1,4 @@
-"""OpenCV preview window showing tracking overlay on the camera feed."""
+"""OpenCV preview window showing a unified neon-green skeleton overlay."""
 
 from __future__ import annotations
 
@@ -11,12 +11,25 @@ from numpy.typing import NDArray
 
 from handspring.types import FrameResult
 
+# MediaPipe connection sets (tuples of (src_idx, dst_idx)).
 _HAND_CONNECTIONS = mp.solutions.hands.HAND_CONNECTIONS
 _FACE_CONNECTIONS = mp.solutions.face_mesh.FACEMESH_CONTOURS
+_POSE_CONNECTIONS = mp.solutions.pose.POSE_CONNECTIONS
+
+# Shared "neon-green skeleton" drawing specs. Colors are BGR (OpenCV order).
+_DOT_SPEC = mp.solutions.drawing_utils.DrawingSpec(
+    color=(102, 204, 153),  # BGR for #99CC66 — desaturated green dots
+    thickness=-1,
+    circle_radius=3,
+)
+_LINE_SPEC = mp.solutions.drawing_utils.DrawingSpec(
+    color=(136, 255, 0),  # BGR for #00FF88 — bright green bones
+    thickness=2,
+)
 
 
 class Preview:
-    """Wraps the OpenCV preview window — manages the HighGUI window lifecycle."""
+    """OpenCV preview window with landmark-skeleton overlay."""
 
     WINDOW_NAME = "handspring"
 
@@ -29,34 +42,42 @@ class Preview:
         bgr_frame: NDArray[np.uint8],
         hand_landmark_lists: list[Any],
         face_landmark_lists: list[Any],
+        pose_landmarks: Any | None,
         frame_result: FrameResult,
         osc_target: str,
     ) -> bool:
-        """Draw one frame. Returns True to keep going, False if the user
-        pressed 'q' or closed the window."""
-        display: NDArray[np.uint8] = bgr_frame.copy()
+        display = bgr_frame.copy()
         if self._mirror:
             display = cv2.flip(display, 1)  # type: ignore[assignment]
-            # When mirroring, landmark x coordinates need flipping for the
-            # overlay to align.
-            hand_landmark_lists = [
-                _mirror_landmarks(ll, display.shape[1]) for ll in hand_landmark_lists
-            ]
-            face_landmark_lists = [
-                _mirror_landmarks(ll, display.shape[1]) for ll in face_landmark_lists
-            ]
+            hand_landmark_lists = [_mirror_landmarks(ll) for ll in hand_landmark_lists]
+            face_landmark_lists = [_mirror_landmarks(ll) for ll in face_landmark_lists]
+            if pose_landmarks is not None:
+                pose_landmarks = _mirror_landmarks(pose_landmarks)
 
-        for ll in hand_landmark_lists:
-            mp.solutions.drawing_utils.draw_landmarks(display, ll, _HAND_CONNECTIONS)
+        # Draw pose first (background layer), then face, then hands on top.
+        if pose_landmarks is not None:
+            mp.solutions.drawing_utils.draw_landmarks(
+                display,
+                pose_landmarks,
+                _POSE_CONNECTIONS,
+                landmark_drawing_spec=_DOT_SPEC,
+                connection_drawing_spec=_LINE_SPEC,
+            )
         for ll in face_landmark_lists:
             mp.solutions.drawing_utils.draw_landmarks(
                 display,
                 ll,
                 _FACE_CONNECTIONS,
                 landmark_drawing_spec=None,
-                connection_drawing_spec=mp.solutions.drawing_utils.DrawingSpec(
-                    color=(160, 160, 160), thickness=1
-                ),
+                connection_drawing_spec=_LINE_SPEC,
+            )
+        for ll in hand_landmark_lists:
+            mp.solutions.drawing_utils.draw_landmarks(
+                display,
+                ll,
+                _HAND_CONNECTIONS,
+                landmark_drawing_spec=_DOT_SPEC,
+                connection_drawing_spec=_LINE_SPEC,
             )
 
         _draw_status(display, frame_result, osc_target)
@@ -83,6 +104,7 @@ def _draw_status(frame: NDArray[np.uint8], frame_result: FrameResult, osc_target
         f"OSC -> {osc_target}",
         f"Left:  {frame_result.left.gesture if frame_result.left.present else '-'}",
         f"Right: {frame_result.right.gesture if frame_result.right.present else '-'}",
+        f"Pose:  {'on' if frame_result.pose.present else '-'}",
     ]
     y = 30
     for text in lines:
@@ -93,7 +115,7 @@ def _draw_status(frame: NDArray[np.uint8], frame_result: FrameResult, osc_target
         y += 24
 
 
-def _mirror_landmarks(landmark_list: Any, _width: int) -> Any:
+def _mirror_landmarks(landmark_list: Any) -> Any:
     """Return a new landmark list with x coordinates mirrored to 1 - x."""
     from mediapipe.framework.formats import landmark_pb2
 
