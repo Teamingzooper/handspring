@@ -14,6 +14,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 from handspring import __version__
+from handspring.app_mode import AppMode, AppModeController
+from handspring.jarvis import JarvisController
 from handspring.osc_out import OscEmitter
 from handspring.preview import Preview
 from handspring.synth import Synth
@@ -83,6 +85,19 @@ def main(argv: list[str] | None = None) -> int:
     emitter = OscEmitter(host=args.host, port=args.port)
     synth_params = SynthParams()
     synth_controller = SynthController(synth_params)
+
+    last_user_volume = {"v": synth_params.snapshot().volume}
+
+    def _on_app_mode_change(new_mode: AppMode) -> None:
+        if new_mode == "jarvis":
+            last_user_volume["v"] = synth_params.snapshot().volume
+            synth_params.set_volume(0.0)
+        else:
+            synth_params.set_volume(last_user_volume["v"])
+
+    app_mode_controller = AppModeController(on_change=_on_app_mode_change)
+    jarvis = JarvisController()
+
     synth: Synth | None = None
     if not args.no_synth:
         try:
@@ -119,6 +134,29 @@ def main(argv: list[str] | None = None) -> int:
             result = tracker.process(bgr)
             emitter.emit(result)
             synth_controller.update(result)
+            now = time.monotonic()
+            mouth_open_val = (
+                result.face.features.mouth_open
+                if result.face.present and result.face.features is not None
+                else 0.0
+            )
+            app_mode_controller.update(
+                mouth_open=mouth_open_val,
+                face_present=result.face.present,
+                now=now,
+            )
+            mode = app_mode_controller.mode()
+
+            if mode == "jarvis":
+                jarvis.update(result, now=now)
+
+            emitter.emit_app_mode(mode)
+            if mode == "jarvis":
+                emitter.emit_jarvis_events(
+                    jarvis.pop_events(),
+                    window_count=len(jarvis.manager.windows()),
+                )
+
             if not args.no_synth:
                 emitter.emit_synth(synth_params.snapshot())
 
@@ -137,10 +175,11 @@ def main(argv: list[str] | None = None) -> int:
                     f"{args.host}:{args.port}",
                     snap_for_preview,
                     hint_for_preview,
+                    mode,
+                    jarvis,
                 ):
                     break
 
-            now = time.monotonic()
             if now - last_log >= args.fps_log_interval:
                 _print_status(result)
                 last_log = now
