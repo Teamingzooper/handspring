@@ -6,6 +6,8 @@ from handspring.types import (
     FrameResult,
     HandFeatures,
     HandState,
+    PoseLandmark,
+    PoseState,
 )
 
 
@@ -49,6 +51,38 @@ def test_frame_result_composition():
     left = HandState(present=False, features=None, gesture="none")
     right = HandState(present=False, features=None, gesture="none")
     face = FaceState(present=False, features=None)
-    fr = FrameResult(left=left, right=right, face=face, fps=30.0)
+    pose = PoseState(present=False, joints=None)
+    fr = FrameResult(left=left, right=right, face=face, pose=pose, fps=30.0)
     assert fr.fps == 30.0
     assert fr.left.gesture == "none"
+
+
+def test_pose_landmark_frozen():
+    pl = PoseLandmark(x=0.4, y=0.5, z=-0.1, visible=True)
+    import pytest
+
+    with pytest.raises(AttributeError):
+        pl.x = 0.0  # type: ignore[misc]
+
+
+def test_pose_state_absent():
+    ps = PoseState(present=False, joints=None)
+    assert ps.present is False
+    assert ps.joints is None
+
+
+def test_pose_state_present_with_joints():
+    pl = PoseLandmark(x=0.4, y=0.5, z=0.0, visible=True)
+    ps = PoseState(present=True, joints={"shoulder_left": pl})
+    assert ps.present is True
+    assert ps.joints is not None
+    assert ps.joints["shoulder_left"].x == 0.4
+
+
+def test_frame_result_has_pose():
+    left = HandState(present=False, features=None, gesture="none")
+    right = HandState(present=False, features=None, gesture="none")
+    face = FaceState(present=False, features=None)
+    pose = PoseState(present=False, joints=None)
+    fr = FrameResult(left=left, right=right, face=face, pose=pose, fps=30.0)
+    assert fr.pose.present is False

@@ -7,6 +7,16 @@ from typing import Literal
 
 Side = Literal["left", "right"]
 Gesture = Literal["fist", "open", "point", "peace", "thumbs_up", "none"]
+Joint = Literal[
+    "shoulder_left",
+    "shoulder_right",
+    "elbow_left",
+    "elbow_right",
+    "wrist_left",
+    "wrist_right",
+    "hip_left",
+    "hip_right",
+]
 
 
 @dataclass(frozen=True)
@@ -56,10 +66,39 @@ class FaceState:
 
 
 @dataclass(frozen=True)
+class PoseLandmark:
+    """One upper-body joint position in a single frame.
+
+    x, y are normalized in [0, 1]. z is relative depth. `visible` mirrors
+    MediaPipe's per-landmark visibility score thresholded at 0.5; joints
+    with `visible=False` have unreliable x/y/z and should be ignored by
+    downstream consumers.
+    """
+
+    x: float
+    y: float
+    z: float
+    visible: bool
+
+
+@dataclass(frozen=True)
+class PoseState:
+    """Body pose state for a single frame.
+
+    `joints` maps the 8 tracked joint names to their landmarks when present;
+    None when MediaPipe didn't detect a body at all.
+    """
+
+    present: bool
+    joints: dict[Joint, PoseLandmark] | None
+
+
+@dataclass(frozen=True)
 class FrameResult:
     """Full per-frame tracking result."""
 
     left: HandState
     right: HandState
     face: FaceState
+    pose: PoseState
     fps: float
