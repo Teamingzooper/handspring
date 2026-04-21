@@ -31,7 +31,7 @@ class OscEmitter:
         port: int = 9000,
     ) -> None:
         self._client: _SendsOsc = client if client is not None else _make_client(host, port)
-        self._last_gesture: dict[Side, Gesture | None] = {"left": None, "right": None}
+        self._last_gesture: dict[Side, Gesture] = {"left": "none", "right": "none"}
 
     def emit(self, frame: FrameResult) -> None:
         self._emit_hand("left", frame.left)

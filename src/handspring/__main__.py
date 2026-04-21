@@ -17,6 +17,7 @@ from handspring import __version__
 from handspring.osc_out import OscEmitter
 from handspring.preview import Preview
 from handspring.tracker import Tracker, TrackerConfig
+from handspring.types import FrameResult
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -142,7 +143,7 @@ def _extract_landmark_lists(
     return hand_lists, face_lists
 
 
-def _print_status(result: Any) -> None:
+def _print_status(result: FrameResult) -> None:
     left = result.left.gesture if result.left.present else "-"
     right = result.right.gesture if result.right.present else "-"
     face = "yes" if result.face.present else "no"
