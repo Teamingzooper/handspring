@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -11,23 +12,25 @@ import mediapipe as mp
 import numpy as np
 from numpy.typing import NDArray
 
+from handspring.expressions import classify_expression, eye_open_values
 from handspring.features import face_features, hand_features
 from handspring.gestures import classify_hand
+from handspring.history import HandHistory
+from handspring.motion import MotionDetector, bi_hand_clap_detector
 from handspring.types import (
     FaceState,
     FrameResult,
     HandState,
     Joint,
+    MotionState,
     PoseLandmark,
     PoseState,
     Side,
 )
 
-# MediaPipe PoseLandmark indices for the 8 joints we emit.
-# MediaPipe labels are camera-perspective; we invert to user-perspective.
 _POSE_JOINTS: dict[Joint, int] = {
-    "shoulder_left": 12,  # MediaPipe RIGHT_SHOULDER (camera's right = user's left)
-    "shoulder_right": 11,  # MediaPipe LEFT_SHOULDER
+    "shoulder_left": 12,
+    "shoulder_right": 11,
     "elbow_left": 14,
     "elbow_right": 13,
     "wrist_left": 16,
@@ -37,6 +40,7 @@ _POSE_JOINTS: dict[Joint, int] = {
 }
 
 _VISIBILITY_THRESHOLD = 0.5
+_HISTORY_CAPACITY = 30
 
 
 @dataclass
@@ -49,8 +53,6 @@ class TrackerConfig:
 
 
 class Tracker:
-    """Runs MediaPipe hand + face + pose tracking over successive frames."""
-
     def __init__(self, config: TrackerConfig | None = None) -> None:
         self._config = config or TrackerConfig()
 
@@ -64,7 +66,7 @@ class Tracker:
             self._face_mesh: Any = mp.solutions.face_mesh.FaceMesh(
                 static_image_mode=False,
                 max_num_faces=1,
-                refine_landmarks=False,
+                refine_landmarks=True,  # NEW: needed for accurate eye/lip landmarks
                 min_detection_confidence=self._config.min_detection_confidence,
                 min_tracking_confidence=self._config.min_tracking_confidence,
             )
@@ -82,6 +84,13 @@ class Tracker:
         else:
             self._pose = None
 
+        self._left_history = HandHistory(capacity=_HISTORY_CAPACITY)
+        self._right_history = HandHistory(capacity=_HISTORY_CAPACITY)
+        self._left_motion = MotionDetector()
+        self._right_motion = MotionDetector()
+        self._clap_detector = bi_hand_clap_detector()
+
+        self._start_time = time.perf_counter()
         self._last_frame_time: float | None = None
         self._fps_ema: float = 0.0
 
@@ -93,11 +102,25 @@ class Tracker:
         face_result: Any = self._face_mesh.process(rgb) if self._face_mesh is not None else None
         pose_result: Any = self._pose.process(rgb) if self._pose is not None else None
 
-        left_state, right_state = self._hand_states(hand_results)
+        now = time.perf_counter() - self._start_time
+
+        left_state, right_state = self._hand_states(hand_results, now)
         face_state = self._face_state(face_result)
         pose_state = self._pose_state(pose_result)
 
-        now = time.perf_counter()
+        clap_event = False
+        if (
+            left_state.present
+            and right_state.present
+            and left_state.features
+            and right_state.features
+        ):
+            dx = left_state.features.x - right_state.features.x
+            dy = left_state.features.y - right_state.features.y
+            distance = math.hypot(dx, dy)
+            clap_event = self._clap_detector.update(distance, now)
+
+        # FPS EMA
         fps = 0.0
         if self._last_frame_time is not None:
             dt = now - self._last_frame_time
@@ -113,6 +136,7 @@ class Tracker:
             face=face_state,
             pose=pose_state,
             fps=fps,
+            clap_event=clap_event,
         )
 
     def close(self) -> None:
@@ -122,37 +146,72 @@ class Tracker:
         if self._pose is not None:
             self._pose.close()
 
-    # ---- Internals ----
+    def _hand_states(self, hand_results: Any, now: float) -> tuple[HandState, HandState]:
+        absent_motion = MotionState(
+            pinching=False, dragging=False, drag_dx=0.0, drag_dy=0.0, event=None
+        )
+        absent = HandState(present=False, features=None, gesture="none", motion=absent_motion)
 
-    def _hand_states(self, hand_results: Any) -> tuple[HandState, HandState]:
-        absent = HandState(present=False, features=None, gesture="none")
         left = absent
         right = absent
-        if not hand_results.multi_hand_landmarks or not hand_results.multi_handedness:
-            return left, right
-        for landmarks, handedness in zip(
-            hand_results.multi_hand_landmarks,
-            hand_results.multi_handedness,
-            strict=False,
-        ):
-            label: str = handedness.classification[0].label
-            side: Side = "right" if label == "Left" else "left"
-            arr = _landmark_list_to_array(landmarks)
-            feats = hand_features(arr)
-            gesture = classify_hand(arr)
-            state = HandState(present=True, features=feats, gesture=gesture)
-            if side == "left":
-                left = state
-            else:
-                right = state
+        if hand_results.multi_hand_landmarks and hand_results.multi_handedness:
+            for landmarks, handedness in zip(
+                hand_results.multi_hand_landmarks,
+                hand_results.multi_handedness,
+                strict=False,
+            ):
+                label: str = handedness.classification[0].label
+                side: Side = "right" if label == "Left" else "left"
+                arr = _landmark_list_to_array(landmarks)
+                feats = hand_features(arr)
+                gesture = classify_hand(arr)
+
+                history = self._left_history if side == "left" else self._right_history
+                detector = self._left_motion if side == "left" else self._right_motion
+                history.push(feats, now)
+                m = detector.update(history, now)
+                motion = MotionState(
+                    pinching=m.pinching,
+                    dragging=m.dragging,
+                    drag_dx=m.drag_dx,
+                    drag_dy=m.drag_dy,
+                    event=m.event,
+                )
+                state = HandState(present=True, features=feats, gesture=gesture, motion=motion)
+                if side == "left":
+                    left = state
+                else:
+                    right = state
+
+        # Tick motion detectors even when a hand is absent so state doesn't stale.
+        if not left.present:
+            self._left_motion.update(self._left_history, now)
+        if not right.present:
+            self._right_motion.update(self._right_history, now)
+
         return left, right
 
     def _face_state(self, face_result: Any) -> FaceState:
         if face_result is None or not face_result.multi_face_landmarks:
-            return FaceState(present=False, features=None)
+            return FaceState(
+                present=False,
+                features=None,
+                expression="neutral",
+                eye_left_open=0.0,
+                eye_right_open=0.0,
+            )
         lm = face_result.multi_face_landmarks[0]
         arr = _landmark_list_to_array(lm)
-        return FaceState(present=True, features=face_features(arr))
+        feats = face_features(arr)
+        expression = classify_expression(arr)
+        left_open, right_open = eye_open_values(arr)
+        return FaceState(
+            present=True,
+            features=feats,
+            expression=expression,
+            eye_left_open=left_open,
+            eye_right_open=right_open,
+        )
 
     def _pose_state(self, pose_result: Any) -> PoseState:
         if pose_result is None or pose_result.pose_landmarks is None:
