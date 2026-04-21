@@ -59,7 +59,7 @@ Discrete gesture events (per hand, sent only on state transitions):
 
 | Address | Type | Values |
 |---|---|---|
-| `/hand/<side>/gesture` | string | `fist` \| `open` \| `point` \| `peace` \| `thumbs_up` \| `none` |
+| `/hand/<side>/gesture` | string | `fist` \| `open` \| `point` \| `peace` \| `thumbs_up` \| `ok` \| `rock` \| `three` \| `none` |
 
 Body pose (continuous per frame when present):
 
@@ -72,6 +72,30 @@ Body pose (continuous per frame when present):
 | `/pose/<joint>/z` | float | — | relative depth |
 
 `<joint>` is one of: `shoulder_left`, `shoulder_right`, `elbow_left`, `elbow_right`, `wrist_left`, `wrist_right`, `hip_left`, `hip_right`.
+
+Motion state per hand (continuous per frame):
+
+| Address | Type | Notes |
+|---|---|---|
+| `/hand/<side>/pinching` | int | 0 or 1 |
+| `/hand/<side>/dragging` | int | 0 or 1 |
+| `/hand/<side>/drag_dx` | float | x offset from drag-start, only when `dragging=1` |
+| `/hand/<side>/drag_dy` | float | y offset |
+
+Motion events (one-shot per frame):
+
+| Address | Type | Values |
+|---|---|---|
+| `/hand/<side>/event` | string | `wave` \| `pinch` \| `expand` \| `drag_start` \| `drag_end` |
+| `/motion/clap` | int | `1` on each clap impact |
+
+Face (continuous + state-change):
+
+| Address | Type | Notes |
+|---|---|---|
+| `/face/eye_left_open` | float | 0..1 |
+| `/face/eye_right_open` | float | 0..1 |
+| `/face/expression` | string | `smile` \| `frown` \| `surprise` \| `wink_left` \| `wink_right` \| `neutral` — emitted only on change |
 
 ## CLI flags
 
