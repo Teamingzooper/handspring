@@ -6,6 +6,7 @@ from handspring.types import (
     FrameResult,
     HandFeatures,
     HandState,
+    MotionState,
     PoseLandmark,
     PoseState,
 )
@@ -20,7 +21,8 @@ def test_hand_features_frozen():
 
 
 def test_hand_state_absent():
-    hs = HandState(present=False, features=None, gesture="none")
+    m = MotionState(pinching=False, dragging=False, drag_dx=0.0, drag_dy=0.0, event=None)
+    hs = HandState(present=False, features=None, gesture="none", motion=m)
     assert hs.present is False
     assert hs.features is None
     assert hs.gesture == "none"
@@ -28,14 +30,17 @@ def test_hand_state_absent():
 
 def test_hand_state_present():
     hf = HandFeatures(x=0.1, y=0.2, z=0.3, openness=0.9, pinch=0.05)
-    hs = HandState(present=True, features=hf, gesture="open")
+    m = MotionState(pinching=False, dragging=False, drag_dx=0.0, drag_dy=0.0, event=None)
+    hs = HandState(present=True, features=hf, gesture="open", motion=m)
     assert hs.present is True
     assert hs.features == hf
     assert hs.gesture == "open"
 
 
 def test_face_state_absent():
-    fs = FaceState(present=False, features=None)
+    fs = FaceState(
+        present=False, features=None, expression="neutral", eye_left_open=0.0, eye_right_open=0.0
+    )
     assert fs.present is False
     assert fs.features is None
 
@@ -48,11 +53,14 @@ def test_face_features_ranges():
 
 
 def test_frame_result_composition():
-    left = HandState(present=False, features=None, gesture="none")
-    right = HandState(present=False, features=None, gesture="none")
-    face = FaceState(present=False, features=None)
+    m = MotionState(pinching=False, dragging=False, drag_dx=0.0, drag_dy=0.0, event=None)
+    left = HandState(present=False, features=None, gesture="none", motion=m)
+    right = HandState(present=False, features=None, gesture="none", motion=m)
+    face = FaceState(
+        present=False, features=None, expression="neutral", eye_left_open=0.0, eye_right_open=0.0
+    )
     pose = PoseState(present=False, joints=None)
-    fr = FrameResult(left=left, right=right, face=face, pose=pose, fps=30.0)
+    fr = FrameResult(left=left, right=right, face=face, pose=pose, fps=30.0, clap_event=False)
     assert fr.fps == 30.0
     assert fr.left.gesture == "none"
 
@@ -80,9 +88,57 @@ def test_pose_state_present_with_joints():
 
 
 def test_frame_result_has_pose():
-    left = HandState(present=False, features=None, gesture="none")
-    right = HandState(present=False, features=None, gesture="none")
-    face = FaceState(present=False, features=None)
+    m = MotionState(pinching=False, dragging=False, drag_dx=0.0, drag_dy=0.0, event=None)
+    left = HandState(present=False, features=None, gesture="none", motion=m)
+    right = HandState(present=False, features=None, gesture="none", motion=m)
+    face = FaceState(
+        present=False, features=None, expression="neutral", eye_left_open=0.0, eye_right_open=0.0
+    )
     pose = PoseState(present=False, joints=None)
-    fr = FrameResult(left=left, right=right, face=face, pose=pose, fps=30.0)
+    fr = FrameResult(left=left, right=right, face=face, pose=pose, fps=30.0, clap_event=False)
     assert fr.pose.present is False
+
+
+def test_motion_state_default():
+    m = MotionState(pinching=False, dragging=False, drag_dx=0.0, drag_dy=0.0, event=None)
+    assert m.pinching is False
+    assert m.event is None
+
+
+def test_motion_state_with_event():
+    m = MotionState(pinching=True, dragging=False, drag_dx=0.0, drag_dy=0.0, event="pinch")
+    assert m.event == "pinch"
+
+
+def test_hand_state_has_motion():
+    m = MotionState(pinching=False, dragging=False, drag_dx=0.0, drag_dy=0.0, event=None)
+    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0)
+    hs = HandState(present=True, features=hf, gesture="open", motion=m)
+    assert hs.motion.pinching is False
+
+
+def test_face_state_has_expression_and_eye_open():
+    fs = FaceState(
+        present=False,
+        features=None,
+        expression="neutral",
+        eye_left_open=0.0,
+        eye_right_open=0.0,
+    )
+    assert fs.expression == "neutral"
+    assert fs.eye_left_open == 0.0
+
+
+def test_frame_result_has_clap_event():
+    m = MotionState(pinching=False, dragging=False, drag_dx=0.0, drag_dy=0.0, event=None)
+    hs = HandState(present=False, features=None, gesture="none", motion=m)
+    fs = FaceState(
+        present=False,
+        features=None,
+        expression="neutral",
+        eye_left_open=0.0,
+        eye_right_open=0.0,
+    )
+    ps = PoseState(present=False, joints=None)
+    fr = FrameResult(left=hs, right=hs, face=fs, pose=ps, fps=30.0, clap_event=False)
+    assert fr.clap_event is False

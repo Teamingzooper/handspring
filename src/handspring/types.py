@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 Side = Literal["left", "right"]
-Gesture = Literal["fist", "open", "point", "peace", "thumbs_up", "none"]
+Gesture = Literal["fist", "open", "point", "peace", "thumbs_up", "ok", "rock", "three", "none"]
+Expression = Literal["smile", "frown", "surprise", "wink_left", "wink_right", "neutral"]
+MotionEvent = Literal["wave", "pinch", "expand", "drag_start", "drag_end"]
 Joint = Literal[
     "shoulder_left",
     "shoulder_right",
@@ -36,12 +38,30 @@ class HandFeatures:
 
 
 @dataclass(frozen=True)
+class MotionState:
+    """Per-hand motion state for a single frame.
+
+    `event` is a one-shot: non-None only on the frame a motion event is
+    detected. `pinching` and `dragging` are continuous state flags.
+    `drag_dx` / `drag_dy` are measured from the frame where `drag_start`
+    fired; they are 0.0 whenever `dragging` is False.
+    """
+
+    pinching: bool
+    dragging: bool
+    drag_dx: float
+    drag_dy: float
+    event: MotionEvent | None
+
+
+@dataclass(frozen=True)
 class HandState:
     """One hand's state for a single frame."""
 
     present: bool
     features: HandFeatures | None
     gesture: Gesture
+    motion: MotionState
 
 
 @dataclass(frozen=True)
@@ -63,6 +83,9 @@ class FaceState:
 
     present: bool
     features: FaceFeatures | None
+    expression: Expression
+    eye_left_open: float
+    eye_right_open: float
 
 
 @dataclass(frozen=True)
@@ -102,3 +125,4 @@ class FrameResult:
     face: FaceState
     pose: PoseState
     fps: float
+    clap_event: bool
