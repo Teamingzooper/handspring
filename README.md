@@ -38,6 +38,28 @@ Move your hands. The synth plays sine tones — left hand Y controls pitch,
 right hand Y controls amplitude. Make a fist with your left hand to mute;
 open your palm to unmute.
 
+## Built-in synth
+
+handspring includes an in-process synth. The moment you run `python -m handspring`
+a sustained tone plays. Put your LEFT hand in a fist to enter the edit mode —
+point with the right hand to adjust volume; open right hand to change pitch (Y)
+and stepping (X). Put your RIGHT hand in a fist to edit filter cutoff and
+modulation with your left hand.
+
+Disable the built-in synth (for OSC-only workflows) with `--no-synth`.
+
+### Synth parameters
+
+```
+volume       0..1
+note_hz      131..1047 (C3..C6)
+stepping_hz  0..16  — envelope retrigger rate for buildup pulses
+cutoff_hz    200..8000  — lowpass filter
+mod_depth    0..1   — amplitude tremolo depth
+mod_rate     0.1..10  — LFO frequency
+mode         play | edit_left | edit_right
+```
+
 ## OSC reference
 
 Continuous features (sent every frame, ~30 Hz):
@@ -97,6 +119,18 @@ Face (continuous + state-change):
 | `/face/eye_right_open` | float | 0..1 |
 | `/face/expression` | string | `smile` \| `frown` \| `surprise` \| `wink_left` \| `wink_right` \| `neutral` — emitted only on change |
 
+Synth state (continuous):
+
+| Address | Type | Notes |
+|---|---|---|
+| `/synth/volume` | float | 0..1 |
+| `/synth/note_hz` | float | |
+| `/synth/stepping_hz` | float | 0 = sustained |
+| `/synth/cutoff_hz` | float | |
+| `/synth/mod_depth` | float | 0..1 |
+| `/synth/mod_rate` | float | Hz |
+| `/synth/mode` | string | `play` / `edit_left` / `edit_right` — on change |
+
 ## CLI flags
 
 ```
@@ -109,6 +143,7 @@ Face (continuous + state-change):
 --hands {0,1,2}        max hands to track (default: 2)
 --no-mirror            do not mirror the preview horizontally
 --fps-log-interval SEC print status every N seconds (default: 0.5)
+--no-synth             disable the in-process synth
 ```
 
 ## Building your own receiver
