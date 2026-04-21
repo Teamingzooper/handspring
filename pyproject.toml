@@ -11,6 +11,7 @@ dependencies = [
     "opencv-python>=4.10,<5",
     "python-osc>=1.8,<2",
     "numpy>=1.26,<3",
+    "sounddevice>=0.4,<0.5",
 ]
 
 [project.optional-dependencies]
@@ -18,7 +19,6 @@ dev = [
     "pytest>=8.0,<9",
     "ruff>=0.6,<1",
     "mypy>=1.11,<2",
-    "sounddevice>=0.4,<0.5",
 ]
 
 [project.scripts]
