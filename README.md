@@ -60,6 +60,36 @@ mod_rate     0.1..10  — LFO frequency
 mode         play | edit_left | edit_right
 ```
 
+## JARVIS mode
+
+handspring hosts multiple interaction modes. Open your mouth wide for about
+half a second to toggle between **SYNTH** (default) and **JARVIS**. Your audio
+cuts out on entering Jarvis and resumes on returning.
+
+In Jarvis mode:
+
+- **Create** — pinch both thumb-index pairs together, then pull your hands
+  apart. A semi-transparent blue rectangle follows your hands. Release either
+  pinch to commit. Tiny movements are ignored.
+- **Grab** — hold an open hand over a window, then close it. The window
+  follows your palm. Open your hand to drop.
+- **Tap** — point with an index finger. Move your fingertip over a window.
+  After ~150 ms, the window cycles colour and an OSC tap event fires.
+
+Up to 8 windows. Older ones get evicted first.
+
+### Jarvis OSC
+
+| Address | Type | Notes |
+|---|---|---|
+| `/app/mode` | string | `synth` / `jarvis` — on change |
+| `/jarvis/window_count` | int | on change |
+| `/jarvis/window_created` | int | window id, one-shot |
+| `/jarvis/window_tap` | int | window id, one-shot |
+
+Also new per-hand: `/hand/<side>/index_x` and `/hand/<side>/index_y` (both
+float 0..1) for the index fingertip.
+
 ## OSC reference
 
 Continuous features (sent every frame, ~30 Hz):
