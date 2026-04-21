@@ -189,3 +189,77 @@ def face_looking_down() -> NDArray[np.float32]:
     lm = _face_base()
     lm[FACE_NOSE_TIP] = (0.5, 0.63, 0.0)
     return lm
+
+
+# Additional face mesh indices used by the expression classifier.
+FACE_LEFT_EYE_UPPER = 159
+FACE_LEFT_EYE_LOWER = 145
+FACE_LEFT_EYE_LEFT_CORNER = 33
+FACE_LEFT_EYE_RIGHT_CORNER = 133
+FACE_RIGHT_EYE_UPPER = 386
+FACE_RIGHT_EYE_LOWER = 374
+FACE_RIGHT_EYE_LEFT_CORNER = 362
+FACE_RIGHT_EYE_RIGHT_CORNER = 263
+
+
+def _face_neutral_refined() -> NDArray[np.float32]:
+    """Face fixture populated with eye landmarks as well as mouth."""
+    lm = _face_base()
+    # Eye landmarks — assume eyes are open (lid gap ~= 0.025 relative to eye width 0.08)
+    # Left eye (user's left): left corner 33, right corner 133, upper 159, lower 145
+    lm[FACE_LEFT_EYE_LEFT_CORNER] = (0.33, 0.45, 0.0)
+    lm[FACE_LEFT_EYE_RIGHT_CORNER] = (0.41, 0.45, 0.0)
+    lm[FACE_LEFT_EYE_UPPER] = (0.37, 0.438, 0.0)
+    lm[FACE_LEFT_EYE_LOWER] = (0.37, 0.462, 0.0)
+    lm[FACE_RIGHT_EYE_LEFT_CORNER] = (0.59, 0.45, 0.0)
+    lm[FACE_RIGHT_EYE_RIGHT_CORNER] = (0.67, 0.45, 0.0)
+    lm[FACE_RIGHT_EYE_UPPER] = (0.63, 0.438, 0.0)
+    lm[FACE_RIGHT_EYE_LOWER] = (0.63, 0.462, 0.0)
+    return lm
+
+
+def face_neutral() -> NDArray[np.float32]:
+    return _face_neutral_refined()
+
+
+def face_smile() -> NDArray[np.float32]:
+    lm = _face_neutral_refined()
+    # Mouth corners up (y smaller = higher in image space).
+    lm[FACE_LEFT_MOUTH] = (0.4, 0.68, 0.0)  # was 0.70
+    lm[FACE_RIGHT_MOUTH] = (0.6, 0.68, 0.0)
+    return lm
+
+
+def face_frown() -> NDArray[np.float32]:
+    lm = _face_neutral_refined()
+    lm[FACE_LEFT_MOUTH] = (0.4, 0.72, 0.0)  # corners down
+    lm[FACE_RIGHT_MOUTH] = (0.6, 0.72, 0.0)
+    return lm
+
+
+def face_surprise() -> NDArray[np.float32]:
+    lm = _face_neutral_refined()
+    # Wide open mouth
+    lm[FACE_UPPER_LIP] = (0.5, 0.67, 0.0)
+    lm[FACE_LOWER_LIP] = (0.5, 0.75, 0.0)
+    # Wider eyes — bigger lid gap
+    lm[FACE_LEFT_EYE_UPPER] = (0.37, 0.43, 0.0)
+    lm[FACE_LEFT_EYE_LOWER] = (0.37, 0.47, 0.0)
+    lm[FACE_RIGHT_EYE_UPPER] = (0.63, 0.43, 0.0)
+    lm[FACE_RIGHT_EYE_LOWER] = (0.63, 0.47, 0.0)
+    return lm
+
+
+def face_wink_left() -> NDArray[np.float32]:
+    lm = _face_neutral_refined()
+    # Left eye closed (upper and lower lid very close)
+    lm[FACE_LEFT_EYE_UPPER] = (0.37, 0.449, 0.0)
+    lm[FACE_LEFT_EYE_LOWER] = (0.37, 0.451, 0.0)
+    return lm
+
+
+def face_wink_right() -> NDArray[np.float32]:
+    lm = _face_neutral_refined()
+    lm[FACE_RIGHT_EYE_UPPER] = (0.63, 0.449, 0.0)
+    lm[FACE_RIGHT_EYE_LOWER] = (0.63, 0.451, 0.0)
+    return lm
