@@ -58,6 +58,19 @@ def _thumb_up(landmarks: NDArray[np.floating[Any]]) -> bool:
     return bool((wrist[1] - thumb_tip[1]) > 0.1)
 
 
+def _thumb_index_touching(landmarks: NDArray[np.floating[Any]]) -> bool:
+    """Distance between thumb tip and index tip < 0.2 × palm width."""
+    thumb_tip = landmarks[THUMB_TIP]
+    index_tip = landmarks[INDEX_TIP]
+    index_mcp = landmarks[INDEX_MCP]
+    pinky_mcp = landmarks[PINKY_MCP]
+    palm_width = float(np.linalg.norm(pinky_mcp - index_mcp))
+    if palm_width < 1e-6:
+        return False
+    thumb_index_dist = float(np.linalg.norm(thumb_tip - index_tip))
+    return thumb_index_dist < palm_width * 0.2
+
+
 def classify_hand(landmarks: NDArray[np.floating[Any]]) -> Gesture:
     """Classify a (21, 3) MediaPipe hand into one of six gestures."""
     if not np.all(np.isfinite(landmarks)):
@@ -77,6 +90,10 @@ def classify_hand(landmarks: NDArray[np.floating[Any]]) -> Gesture:
     if thumb and not index and not middle and not ring and not pinky and _thumb_up(landmarks):
         return "thumbs_up"
 
+    # ok: thumb + index tips touching; middle/ring/pinky extended.
+    if _thumb_index_touching(landmarks) and middle and ring and pinky:
+        return "ok"
+
     # open: all five extended.
     if extended_count == 5:
         return "open"
@@ -89,6 +106,14 @@ def classify_hand(landmarks: NDArray[np.floating[Any]]) -> Gesture:
     # peace: index + middle extended; ring + pinky curled.
     if index and middle and not ring and not pinky:
         return "peace"
+
+    # rock: index + pinky extended, middle + ring curled.
+    if index and not middle and not ring and pinky:
+        return "rock"
+
+    # three: index + middle + ring extended; pinky curled.
+    if index and middle and ring and not pinky:
+        return "three"
 
     # point: only index extended among the four non-thumbs. Thumb state doesn't matter.
     if index and not middle and not ring and not pinky:

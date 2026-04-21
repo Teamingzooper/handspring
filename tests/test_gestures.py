@@ -7,10 +7,13 @@ import numpy as np
 from handspring.gestures import classify_hand
 from tests.fixtures import (
     hand_fist,
+    hand_ok,
     hand_open,
     hand_peace,
     hand_pinch,
     hand_point,
+    hand_rock,
+    hand_three,
     hand_thumbs_up,
 )
 
@@ -56,3 +59,15 @@ def test_classifier_rejects_nan():
 
     with pytest.raises(ValueError):
         classify_hand(bad)
+
+
+def test_ok_classifies_ok():
+    assert classify_hand(hand_ok()) == "ok"
+
+
+def test_rock_classifies_rock():
+    assert classify_hand(hand_rock()) == "rock"
+
+
+def test_three_classifies_three():
+    assert classify_hand(hand_three()) == "three"

@@ -122,6 +122,26 @@ def hand_pinch() -> NDArray[np.float32]:
     return lm
 
 
+def hand_ok() -> NDArray[np.float32]:
+    """Thumb tip meets index tip; middle/ring/pinky extended."""
+    lm = _hand_skeleton((True, True, True, True, True))
+    # Move thumb tip and index tip to a shared point between them.
+    meeting_point = (lm[4] + lm[8]) * 0.5
+    lm[4] = meeting_point
+    lm[8] = meeting_point
+    return lm
+
+
+def hand_rock() -> NDArray[np.float32]:
+    """Index + pinky extended; middle + ring curled."""
+    return _hand_skeleton((False, True, False, False, True))
+
+
+def hand_three() -> NDArray[np.float32]:
+    """Index + middle + ring extended; pinky curled; thumb ignored."""
+    return _hand_skeleton((False, True, True, True, False))
+
+
 # Face fixtures: a minimal set of the MediaPipe face mesh landmarks we use.
 # We simulate a 478-point array but populate only the indices we read.
 FACE_NOSE_TIP = 1
