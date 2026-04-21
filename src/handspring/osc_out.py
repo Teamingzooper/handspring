@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from handspring.app_mode import AppMode
 from handspring.synth_params import SynthSnapshot
 from handspring.types import (
     Expression,
@@ -43,6 +44,8 @@ class OscEmitter:
         self._last_gesture: dict[Side, Gesture] = {"left": "none", "right": "none"}
         self._last_expression: Expression = "neutral"
         self._last_synth_mode: str | None = None
+        self._last_app_mode: AppMode | None = None
+        self._last_window_count: int | None = None
 
     def emit(self, frame: FrameResult) -> None:
         self._emit_hand("left", frame.left)
@@ -119,3 +122,18 @@ class OscEmitter:
         if snap.mode != self._last_synth_mode:
             self._client.send_message("/synth/mode", snap.mode)
             self._last_synth_mode = snap.mode
+
+    def emit_app_mode(self, mode: AppMode) -> None:
+        if mode != self._last_app_mode:
+            self._client.send_message("/app/mode", mode)
+            self._last_app_mode = mode
+
+    def emit_jarvis_events(self, events: list[tuple[str, int]], *, window_count: int) -> None:
+        for kind, window_id in events:
+            if kind == "created":
+                self._client.send_message("/jarvis/window_created", int(window_id))
+            elif kind == "tap":
+                self._client.send_message("/jarvis/window_tap", int(window_id))
+        if window_count != self._last_window_count:
+            self._client.send_message("/jarvis/window_count", int(window_count))
+            self._last_window_count = window_count

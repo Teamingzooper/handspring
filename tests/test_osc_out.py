@@ -406,3 +406,33 @@ def test_index_tip_emitted():
     assert "/hand/left/index_y" in addresses
     assert "/hand/right/index_x" in addresses
     assert "/hand/right/index_y" in addresses
+
+
+def test_app_mode_change_emitted():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    emitter.emit_app_mode("synth")
+    emitter.emit_app_mode("synth")
+    emitter.emit_app_mode("jarvis")
+    modes = [v for a, v in fake.sent if a == "/app/mode"]
+    assert modes == ["synth", "jarvis"]
+
+
+def test_window_events_emitted():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    emitter.emit_jarvis_events([("created", 5), ("tap", 5), ("tap", 7)], window_count=2)
+    assert ("/jarvis/window_created", 5) in fake.sent
+    assert ("/jarvis/window_tap", 5) in fake.sent
+    assert ("/jarvis/window_tap", 7) in fake.sent
+    assert ("/jarvis/window_count", 2) in fake.sent
+
+
+def test_window_count_only_on_change():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    emitter.emit_jarvis_events([], window_count=3)
+    emitter.emit_jarvis_events([], window_count=3)
+    emitter.emit_jarvis_events([], window_count=4)
+    counts = [v for a, v in fake.sent if a == "/jarvis/window_count"]
+    assert counts == [3, 4]
