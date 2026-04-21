@@ -9,6 +9,8 @@ import mediapipe as mp
 import numpy as np
 from numpy.typing import NDArray
 
+from handspring.app_mode import AppMode
+from handspring.jarvis import WINDOW_COLORS, JarvisController
 from handspring.synth_params import SynthSnapshot
 from handspring.synth_ui import UiHint
 from handspring.types import FrameResult
@@ -53,6 +55,8 @@ class Preview:
         osc_target: str,
         synth_snapshot: SynthSnapshot | None,
         synth_hint: UiHint | None,
+        app_mode: AppMode,
+        jarvis: JarvisController | None,
     ) -> bool:
         display = bgr_frame.copy()
         if self._mirror:
@@ -91,9 +95,15 @@ class Preview:
 
         _draw_status(display, frame_result, osc_target)
 
-        if synth_snapshot is not None:
+        # Mode badge always visible.
+        _draw_mode_badge(display, app_mode)
+
+        if app_mode == "jarvis" and jarvis is not None:
+            _draw_jarvis(display, jarvis, mirrored=self._mirror)
+        # Synth panel only in synth mode.
+        if app_mode == "synth" and synth_snapshot is not None:
             _draw_synth_panel(display, synth_snapshot)
-        if synth_hint is not None and synth_hint.kind != "none":
+        if app_mode == "synth" and synth_hint is not None and synth_hint.kind != "none":
             _draw_synth_hint(display, synth_hint, mirrored=self._mirror)
 
         if not self._created:
@@ -150,6 +160,105 @@ def _draw_status(frame: NDArray[np.uint8], frame_result: FrameResult, osc_target
             frame, text, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (230, 230, 230), 1, cv2.LINE_AA
         )
         y += 24
+
+
+_JARVIS_HINT_TEXT = "pinch-open to spawn - grab to drag - point to tap"
+
+
+def _draw_mode_badge(frame: NDArray[np.uint8], mode: AppMode) -> None:
+    h, w = frame.shape[:2]
+    text = "JARVIS" if mode == "jarvis" else "SYNTH"
+    color = (136, 255, 0) if mode == "jarvis" else (230, 230, 230)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.8
+    thick = 2
+    (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+    cx = (w - tw) // 2
+    cy = 44
+    # Background pill
+    pad = 14
+    cv2.rectangle(
+        frame,
+        (cx - pad, cy - th - 8),
+        (cx + tw + pad, cy + 10),
+        (20, 20, 20),
+        -1,
+    )
+    cv2.rectangle(
+        frame,
+        (cx - pad, cy - th - 8),
+        (cx + tw + pad, cy + 10),
+        color,
+        2,
+    )
+    cv2.putText(frame, text, (cx, cy), font, scale, color, thick, cv2.LINE_AA)
+    # Hint line (jarvis only)
+    if mode == "jarvis":
+        (hw, hh), _ = cv2.getTextSize(_JARVIS_HINT_TEXT, font, 0.45, 1)
+        hcx = (w - hw) // 2
+        cv2.putText(
+            frame,
+            _JARVIS_HINT_TEXT,
+            (hcx, cy + 28),
+            font,
+            0.45,
+            (0, 0, 0),
+            3,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            _JARVIS_HINT_TEXT,
+            (hcx, cy + 28),
+            font,
+            0.45,
+            (180, 220, 180),
+            1,
+            cv2.LINE_AA,
+        )
+
+
+def _draw_jarvis(frame: NDArray[np.uint8], jarvis: JarvisController, *, mirrored: bool) -> None:
+    h, w = frame.shape[:2]
+    overlay = frame.copy()
+    alpha = 0.35
+
+    for win in jarvis.manager.windows():
+        # Translate normalized coords to pixels; apply mirror if needed.
+        x0_n = 1.0 - (win.x + win.width) if mirrored else win.x
+        x0 = int(x0_n * w)
+        y0 = int(win.y * h)
+        x1 = int((x0_n + win.width) * w)
+        y1 = int((win.y + win.height) * h)
+
+        fill = WINDOW_COLORS[win.color_idx]
+        cv2.rectangle(overlay, (x0, y0), (x1, y1), fill, -1)
+
+    # Composite overlay onto frame with alpha.
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, dst=frame)
+
+    # Borders, titles drawn on top (fully opaque).
+    for win in jarvis.manager.windows():
+        x0_n = 1.0 - (win.x + win.width) if mirrored else win.x
+        x0 = int(x0_n * w)
+        y0 = int(win.y * h)
+        x1 = int((x0_n + win.width) * w)
+        y1 = int((win.y + win.height) * h)
+
+        border = WINDOW_COLORS[win.color_idx]
+        cv2.rectangle(frame, (x0, y0), (x1, y1), border, 2)
+        # Title bar
+        cv2.rectangle(frame, (x0, y0), (x1, min(y0 + 22, y1)), border, -1)
+        cv2.putText(
+            frame,
+            f"Window {win.id}",
+            (x0 + 8, y0 + 16),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (20, 20, 20),
+            1,
+            cv2.LINE_AA,
+        )
 
 
 def _draw_synth_panel(frame: NDArray[np.uint8], snap: SynthSnapshot) -> None:
