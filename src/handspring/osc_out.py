@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from handspring.synth_params import SynthSnapshot
 from handspring.types import (
     Expression,
     FaceState,
@@ -41,6 +42,7 @@ class OscEmitter:
         self._client: _SendsOsc = client if client is not None else _make_client(host, port)
         self._last_gesture: dict[Side, Gesture] = {"left": "none", "right": "none"}
         self._last_expression: Expression = "neutral"
+        self._last_synth_mode: str | None = None
 
     def emit(self, frame: FrameResult) -> None:
         self._emit_hand("left", frame.left)
@@ -104,3 +106,14 @@ class OscEmitter:
             self._client.send_message(f"/pose/{joint_name}/x", float(lm.x))
             self._client.send_message(f"/pose/{joint_name}/y", float(lm.y))
             self._client.send_message(f"/pose/{joint_name}/z", float(lm.z))
+
+    def emit_synth(self, snap: SynthSnapshot) -> None:
+        self._client.send_message("/synth/volume", float(snap.volume))
+        self._client.send_message("/synth/note_hz", float(snap.note_hz))
+        self._client.send_message("/synth/stepping_hz", float(snap.stepping_hz))
+        self._client.send_message("/synth/cutoff_hz", float(snap.cutoff_hz))
+        self._client.send_message("/synth/mod_depth", float(snap.mod_depth))
+        self._client.send_message("/synth/mod_rate", float(snap.mod_rate))
+        if snap.mode != self._last_synth_mode:
+            self._client.send_message("/synth/mode", snap.mode)
+            self._last_synth_mode = snap.mode

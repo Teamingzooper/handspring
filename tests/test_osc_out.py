@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from handspring.osc_out import OscEmitter
+from handspring.synth_params import SynthSnapshot
 from handspring.types import (
     FaceFeatures,
     FaceState,
@@ -350,3 +351,47 @@ def test_face_eye_open_continuous():
     emitter.emit(fr)
     assert ("/face/eye_left_open", 0.75) in fake.sent
     assert ("/face/eye_right_open", 0.92) in fake.sent
+
+
+def test_synth_snapshot_emitted():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    snap = SynthSnapshot(
+        volume=0.65,
+        note_hz=523.25,
+        stepping_hz=4.0,
+        cutoff_hz=2500.0,
+        mod_depth=0.3,
+        mod_rate=2.0,
+        mode="edit_left",
+    )
+    emitter.emit_synth(snap)
+    assert ("/synth/volume", 0.65) in fake.sent
+    assert ("/synth/note_hz", 523.25) in fake.sent
+    assert ("/synth/stepping_hz", 4.0) in fake.sent
+    assert ("/synth/cutoff_hz", 2500.0) in fake.sent
+    assert ("/synth/mod_depth", 0.3) in fake.sent
+    assert ("/synth/mod_rate", 2.0) in fake.sent
+
+
+def test_synth_mode_only_on_change():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+
+    def snap(mode):  # type: ignore[no-untyped-def]
+        return SynthSnapshot(
+            volume=0.5,
+            note_hz=440.0,
+            stepping_hz=0.0,
+            cutoff_hz=3000.0,
+            mod_depth=0.0,
+            mod_rate=1.0,
+            mode=mode,
+        )
+
+    emitter.emit_synth(snap("play"))
+    emitter.emit_synth(snap("play"))
+    emitter.emit_synth(snap("edit_left"))
+    emitter.emit_synth(snap("edit_left"))
+    modes = [v for a, v in fake.sent if a == "/synth/mode"]
+    assert modes == ["play", "edit_left"]
