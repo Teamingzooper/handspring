@@ -132,6 +132,7 @@ def _draw_status(frame: NDArray[np.uint8], frame_result: FrameResult, osc_target
         f"Left:  {frame_result.left.gesture if frame_result.left.present else '-'}",
         f"Right: {frame_result.right.gesture if frame_result.right.present else '-'}",
         f"Pose:  {'on' if frame_result.pose.present else '-'}",
+        f"Face:  {frame_result.face.expression if frame_result.face.present else '-'}",
     ]
     y = 30
     for text in lines:

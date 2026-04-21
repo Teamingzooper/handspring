@@ -154,9 +154,10 @@ def _extract_landmark_lists(
 def _print_status(result: FrameResult) -> None:
     left = result.left.gesture if result.left.present else "-"
     right = result.right.gesture if result.right.present else "-"
-    face = "yes" if result.face.present else "no"
+    face = result.face.expression if result.face.present else "-"
+    clap = "CLAP" if result.clap_event else "    "
     print(
-        f"\rFPS {result.fps:5.1f}  L:{left:<10} R:{right:<10} face:{face}",
+        f"\rFPS {result.fps:5.1f}  L:{left:<10} R:{right:<10} face:{face:<10} {clap}",
         end="",
         flush=True,
     )
