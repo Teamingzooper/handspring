@@ -269,7 +269,7 @@ def _draw_jarvis(frame: NDArray[np.uint8], jarvis: JarvisController, *, mirrored
         handle_color = (
             (136, 255, 0) if resizing_id == win.id else (100, 200, 255)
         )  # green when active, cyan otherwise
-        handle_size = 10 if resizing_id == win.id else 8
+        handle_size = 28 if resizing_id == win.id else 22
         hx = x1
         hy = y0
         cv2.rectangle(
