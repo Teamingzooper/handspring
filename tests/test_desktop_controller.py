@@ -437,3 +437,38 @@ def test_cursor_inset_reaches_screen_edges():
             c.update(_frame(_absent(), state), now=i * 0.033)
         sx, _sy = mv.call_args[0]
         assert sx == 0  # hit the left edge
+
+
+def test_radial_root_locks_when_hand_enters_sub_ring():
+    """Hover Create in root ring, push out to sub ring; wiggling angle should
+    keep you on Create's subs, not flip to a neighboring root slice."""
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+    ):
+        # Enter pinch + wait past hold duration.
+        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.0)
+        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.5)
+        # In root ring at angle that points to slice 1 (Create): east-ish
+        # direction works since Create is clockwise from top.
+        # Slice 1 center = 90° clockwise from top = pointing right (+x).
+        # Put hand at (0.35, 0.5) — right of origin (0.3, 0.5), in root range.
+        c.update(_frame(_hand("open", 0.35, 0.5, pinch=0.95), _absent()), now=0.55)
+        root_ring_selection = c._radial.hovered_root  # type: ignore[attr-defined]
+        # Push out along same angle to sub ring. (0.42, 0.5) ~ 0.12 from origin.
+        c.update(_frame(_hand("open", 0.42, 0.5, pinch=0.95), _absent()), now=0.6)
+        sub_ring_root = c._radial.hovered_root  # type: ignore[attr-defined]
+        assert sub_ring_root == root_ring_selection  # locked
+        # Now wiggle the angle while staying at sub distance: move to (0.30, 0.45)
+        # Distance from origin = 0.11, angle shifts significantly, but root
+        # should stay locked to what we were on.
+        c.update(_frame(_hand("open", 0.42, 0.42, pinch=0.95), _absent()), now=0.65)
+        assert c._radial.hovered_root == sub_ring_root  # type: ignore[attr-defined]
+        # Pull back into the root ring: root should become unlocked (free to
+        # move again).
+        c.update(_frame(_hand("open", 0.32, 0.5, pinch=0.95), _absent()), now=0.7)
+        # We don't assert a specific value here — just that the lock released,
+        # i.e., hovered_sub is back to None.
+        assert c._radial.hovered_sub is None  # type: ignore[attr-defined]

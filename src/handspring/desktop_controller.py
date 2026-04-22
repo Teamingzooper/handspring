@@ -426,14 +426,21 @@ class DesktopController:
             r.hovered_sub = None
             return
 
-        # Hovered root is determined by angle (always when past inner dead zone).
-        r.hovered_root = self._slice_index(dx, dy, len(_ROOT_ITEMS))
-
         if dist < _RADIAL_SUB_THRESHOLD:
+            # In the root ring: angle picks which root slice is highlighted.
+            # Moving back here also unlocks the root so the user can swap.
+            r.hovered_root = self._slice_index(dx, dy, len(_ROOT_ITEMS))
             r.hovered_sub = None
             return
 
-        # Past sub threshold: if the root has subs, pick one by the same angle.
+        # In the sub ring: LOCK the root that was hovered at crossover. Angle
+        # now drives sub selection instead. Pulling the hand back to the root
+        # ring re-enables root switching.
+        if r.hovered_root is None:
+            # User crossed straight from center to sub-ring without ever
+            # landing in the root ring — fall back to picking by angle so
+            # something sensible is highlighted.
+            r.hovered_root = self._slice_index(dx, dy, len(_ROOT_ITEMS))
         subs = _ROOT_ITEMS[r.hovered_root][1]
         if subs:
             r.hovered_sub = self._slice_index(dx, dy, len(subs))
