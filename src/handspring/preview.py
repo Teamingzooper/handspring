@@ -265,6 +265,29 @@ def _draw_jarvis(frame: NDArray[np.uint8], jarvis: JarvisController, *, mirrored
             cv2.LINE_AA,
         )
 
+    pending = jarvis.pending_rect()
+    if pending is not None:
+        px, py, pw, ph = pending
+        x0_n = 1.0 - (px + pw) if mirrored else px
+        x0 = int(x0_n * w)
+        y0 = int(py * h)
+        x1 = int((x0_n + pw) * w)
+        y1 = int((py + ph) * h)
+
+        # Semi-transparent fill (same overlay approach as real windows, but redo the blend locally).
+        ghost = frame.copy()
+        cv2.rectangle(ghost, (x0, y0), (x1, y1), WINDOW_COLORS[0], -1)
+        cv2.addWeighted(ghost, 0.20, frame, 0.80, 0, dst=frame)
+
+        # Dashed border using _dotted_line (already defined in preview.py).
+        _dotted_line(frame, (x0, y0), (x1, y0), (136, 255, 0), thickness=2, gap=10)
+        _dotted_line(frame, (x1, y0), (x1, y1), (136, 255, 0), thickness=2, gap=10)
+        _dotted_line(frame, (x1, y1), (x0, y1), (136, 255, 0), thickness=2, gap=10)
+        _dotted_line(frame, (x0, y1), (x0, y0), (136, 255, 0), thickness=2, gap=10)
+
+        # "NEW" label near top-left.
+        _label_with_shadow(frame, x0 + 8, y0 + 18, "NEW", (136, 255, 0))
+
 
 def _draw_synth_panel(frame: NDArray[np.uint8], snap: SynthSnapshot) -> None:
     """Lower-left compact synth readout."""
