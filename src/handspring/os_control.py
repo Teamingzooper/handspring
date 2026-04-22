@@ -89,13 +89,27 @@ def mouse_drag(x: int, y: int) -> None:
     Quartz.CGEventPost(Quartz.kCGHIDEventTap, evt)
 
 
-def new_finder_window() -> None:
-    """Fire AppleScript to open a new Finder window."""
+def new_finder_window(bounds: tuple[int, int, int, int] | None = None) -> None:
+    """Open a new Finder window.
+
+    If ``bounds`` is provided as ``(x, y, x2, y2)`` in screen pixels (top-left
+    origin), the new window is sized and positioned to match.
+    """
     if not _MAC:
         return
+    if bounds is None:
+        script = 'tell application "Finder" to make new Finder window'
+    else:
+        x, y, x2, y2 = bounds
+        script = (
+            'tell application "Finder"\n'
+            "    set w to make new Finder window\n"
+            f"    set bounds of w to {{{x}, {y}, {x2}, {y2}}}\n"
+            "end tell"
+        )
     with contextlib.suppress(subprocess.TimeoutExpired, FileNotFoundError):
         subprocess.run(
-            ["osascript", "-e", 'tell application "Finder" to make new Finder window'],
+            ["osascript", "-e", script],
             check=False,
             capture_output=True,
             timeout=2.0,

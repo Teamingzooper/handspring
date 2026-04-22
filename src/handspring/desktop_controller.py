@@ -17,11 +17,14 @@ from dataclasses import dataclass
 
 from handspring import os_control
 from handspring.features import is_pinching
-from handspring.types import FrameResult
+from handspring.types import FrameResult, HandFeatures
 
 _CREATE_ENTRY_DISTANCE = 0.08  # index-tip distance threshold to arm "new window"
-_CREATE_PULL_RELEASE = 0.25  # hands must pull to this distance before release to fire
+_CREATE_MIN_DIAGONAL = 0.15  # hands must pull to this diagonal distance to commit
 _FAILSAFE_HOLD_SECONDS = 5.0  # both-fist hold duration to toggle disabled
+# EMA smoothing factor for the cursor. Higher = more responsive but more jittery.
+# 0.35 gives a roughly 3-frame low-pass (snappy but not jumpy).
+_CURSOR_SMOOTHING = 0.35
 
 
 @dataclass
@@ -31,14 +34,23 @@ class _CursorState:
     pressed: bool = False
     last_x: int = 0
     last_y: int = 0
+    # Smoothed normalized screen coords (0..1). None until first frame.
+    smooth_nx: float | None = None
+    smooth_ny: float | None = None
 
 
 @dataclass
 class _CreateState:
-    """Both-hand-pinch arming state for new-window gesture."""
+    """Both-hand-pinch arming state for new-window gesture.
+
+    While armed we track the live bounding box of the two index fingertips so
+    we can commit a correctly-sized window on release.
+    """
 
     armed: bool = False  # hands were close together while both pinching
-    start_distance: float = 0.0
+    # Live fingertip positions (screen-space, mirrored already applied).
+    cur_left: tuple[float, float] = (0.0, 0.0)
+    cur_right: tuple[float, float] = (0.0, 0.0)
 
 
 class DesktopController:
@@ -119,20 +131,42 @@ class DesktopController:
     def _handle_cursor(self, frame: FrameResult) -> None:
         right = frame.right
         if not right.present or right.features is None:
-            # Hand left frame: release any held click.
+            # Hand left frame: release any held click and reset smoothing so
+            # we don't interpolate from a stale position when the hand returns.
             if self._cursor.pressed:
                 os_control.mouse_up(self._cursor.last_x, self._cursor.last_y)
                 self._cursor.pressed = False
+            self._cursor.smooth_nx = None
+            self._cursor.smooth_ny = None
             return
 
-        # Map index-tip normalized coords → screen pixels. When mirrored, the
-        # user sees a flipped image; flip x to map "my hand to the right of my
-        # body" → "cursor on the right of my screen".
-        nx = 1.0 - right.features.index_x if self._mirrored else right.features.index_x
-        ny = right.features.index_y
+        f = right.features
+        # Use the MIDPOINT of thumb tip + index tip as the cursor anchor.
+        # Pinching collapses both tips together, so the midpoint stays stable
+        # right where the pinch happens — the cursor doesn't drift downward
+        # when the index finger curls to meet the thumb.
+        raw_nx = (f.index_x + f.thumb_x) * 0.5
+        raw_ny = (f.index_y + f.thumb_y) * 0.5
+        if self._mirrored:
+            raw_nx = 1.0 - raw_nx
+
+        # Low-pass / EMA smoothing: tweens the cursor toward the raw target
+        # each frame instead of jumping there. Kills MediaPipe's per-frame
+        # landmark jitter without adding noticeable lag.
+        if self._cursor.smooth_nx is None:
+            self._cursor.smooth_nx = raw_nx
+            self._cursor.smooth_ny = raw_ny
+        else:
+            a = _CURSOR_SMOOTHING
+            self._cursor.smooth_nx = a * raw_nx + (1 - a) * self._cursor.smooth_nx
+            assert self._cursor.smooth_ny is not None
+            self._cursor.smooth_ny = a * raw_ny + (1 - a) * self._cursor.smooth_ny
+
+        nx = self._cursor.smooth_nx
+        ny = self._cursor.smooth_ny
+        assert ny is not None
         sx = int(nx * self._screen_w)
         sy = int(ny * self._screen_h)
-        # Clamp to valid screen range.
         sx = max(0, min(self._screen_w - 1, sx))
         sy = max(0, min(self._screen_h - 1, sy))
 
@@ -158,6 +192,27 @@ class DesktopController:
 
     # ---- both-hand pinch pull-apart → new Finder window ----
 
+    def _index_screen(self, features: HandFeatures) -> tuple[float, float]:
+        """Return index-tip in screen-normalized coords (mirror applied)."""
+        ix = features.index_x
+        iy = features.index_y
+        if self._mirrored:
+            ix = 1.0 - ix
+        return float(ix), float(iy)
+
+    def pending_create_bounds(self) -> tuple[float, float, float, float] | None:
+        """While arming, return the live bounding rect (in screen 0..1 coords).
+
+        Used by the preview to draw a "NEW" ghost rectangle.
+        """
+        if not self._create.armed:
+            return None
+        lx, ly = self._create.cur_left
+        rx, ry = self._create.cur_right
+        x_min, x_max = min(lx, rx), max(lx, rx)
+        y_min, y_max = min(ly, ry), max(ly, ry)
+        return x_min, y_min, x_max - x_min, y_max - y_min
+
     def _handle_create(self, frame: FrameResult) -> None:
         left = frame.left
         right = frame.right
@@ -169,20 +224,42 @@ class DesktopController:
         )
         if not both_pinching:
             if self._create.armed:
-                # Released — only commit if we'd also pulled apart enough.
+                # Released — commit a new Finder window if we pulled apart far enough.
+                lx, ly = self._create.cur_left
+                rx, ry = self._create.cur_right
+                dx = rx - lx
+                dy = ry - ly
+                diag = (dx * dx + dy * dy) ** 0.5
+                if diag >= _CREATE_MIN_DIAGONAL:
+                    x_min, x_max = min(lx, rx), max(lx, rx)
+                    y_min, y_max = min(ly, ry), max(ly, ry)
+                    # Convert 0..1 screen coords to pixel bounds.
+                    bx1 = int(x_min * self._screen_w)
+                    by1 = int(y_min * self._screen_h)
+                    bx2 = int(x_max * self._screen_w)
+                    by2 = int(y_max * self._screen_h)
+                    # Enforce a minimum pixel size to avoid degenerate windows.
+                    if bx2 - bx1 < 200:
+                        bx2 = bx1 + 200
+                    if by2 - by1 < 150:
+                        by2 = by1 + 150
+                    os_control.new_finder_window(bounds=(bx1, by1, bx2, by2))
+                    self._events_out.append("new_finder_window")
                 self._create.armed = False
             return
         assert left.features is not None and right.features is not None
-        dx = left.features.index_x - right.features.index_x
-        dy = left.features.index_y - right.features.index_y
-        distance = (dx * dx + dy * dy) ** 0.5
+        left_sx, left_sy = self._index_screen(left.features)
+        right_sx, right_sy = self._index_screen(right.features)
+        # Hand-separation in normalized screen coords (not raw, since we flipped x).
+        hdx = left_sx - right_sx
+        hdy = left_sy - right_sy
+        hand_dist = (hdx * hdx + hdy * hdy) ** 0.5
         if not self._create.armed:
-            if distance < _CREATE_ENTRY_DISTANCE:
+            if hand_dist < _CREATE_ENTRY_DISTANCE:
                 self._create.armed = True
-                self._create.start_distance = distance
+                self._create.cur_left = (left_sx, left_sy)
+                self._create.cur_right = (right_sx, right_sy)
             return
-        # Armed — wait for pull-apart + release to fire.
-        if distance >= _CREATE_PULL_RELEASE:
-            os_control.new_finder_window()
-            self._events_out.append("new_finder_window")
-            self._create.armed = False
+        # Armed — live-track corners.
+        self._create.cur_left = (left_sx, left_sy)
+        self._create.cur_right = (right_sx, right_sy)

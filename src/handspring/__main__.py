@@ -187,8 +187,41 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _overlay_status(display: NDArray[np.uint8], desktop: DesktopController) -> None:
-    """Draw DISABLED banner + failsafe progress ring onto the display frame."""
+    """Draw DISABLED banner + failsafe progress ring + pending-window ghost."""
     h, w = display.shape[:2]
+    # Live "NEW WINDOW" ghost while the create gesture is armed.
+    pending = desktop.pending_create_bounds()
+    if pending is not None:
+        px, py, pw, ph = pending
+        x0 = int(px * w)
+        y0 = int(py * h)
+        x1 = int((px + pw) * w)
+        y1 = int((py + ph) * h)
+        # Dashed neon-green rectangle.
+        ghost = display.copy()
+        cv2.rectangle(ghost, (x0, y0), (x1, y1), (136, 255, 0), -1)
+        cv2.addWeighted(ghost, 0.18, display, 0.82, 0, dst=display)
+        cv2.rectangle(display, (x0, y0), (x1, y1), (136, 255, 0), 2)
+        cv2.putText(
+            display,
+            "NEW WINDOW",
+            (x0 + 10, y0 + 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (20, 20, 20),
+            3,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            display,
+            "NEW WINDOW",
+            (x0 + 10, y0 + 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (136, 255, 0),
+            1,
+            cv2.LINE_AA,
+        )
     if not desktop.enabled():
         # Red "DISABLED" pill at top-center.
         text = "GESTURES DISABLED (hold both fists 5s to re-enable)"

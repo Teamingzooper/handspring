@@ -133,7 +133,7 @@ def test_disabled_skips_cursor():
         mv.assert_not_called()
 
 
-def test_both_pinch_pull_apart_fires_new_finder_window():
+def test_both_pinch_pull_apart_then_release_fires_new_finder_window():
     c = DesktopController(mirrored=False)
     with (
         patch("handspring.desktop_controller.os_control.move_cursor"),
@@ -150,13 +150,22 @@ def test_both_pinch_pull_apart_fires_new_finder_window():
             ),
             now=0.0,
         )
-        # Pull apart while still pinching — should fire.
+        # Pull apart while still pinching — tracks but doesn't fire.
         c.update(
             _frame(
-                _hand("open", 0.2, 0.5, pinch=0.95),
-                _hand("open", 0.8, 0.5, pinch=0.95),
+                _hand("open", 0.2, 0.3, pinch=0.95),
+                _hand("open", 0.8, 0.7, pinch=0.95),
             ),
             now=0.1,
+        )
+        nfw.assert_not_called()
+        # Release both pinches → commit.
+        c.update(
+            _frame(
+                _hand("open", 0.2, 0.3, pinch=0.1),
+                _hand("open", 0.8, 0.7, pinch=0.1),
+            ),
+            now=0.2,
         )
         nfw.assert_called_once()
 
@@ -174,3 +183,128 @@ def test_mirrored_flips_x():
         sx, sy = mv.call_args[0]
         sw, _ = c._screen_w, c._screen_h  # type: ignore[attr-defined]
         assert sx > sw * 0.5  # landed on the right half
+
+
+def test_cursor_uses_midpoint_of_thumb_and_index():
+    """Pinching pulls index toward thumb; cursor should track the midpoint so
+    it doesn't drift when you pinch."""
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor") as mv,
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+    ):
+        # Craft features where index_y and thumb_y differ: midpoint y is the
+        # average. Use a hand with index at (0.5, 0.4) and thumb at (0.5, 0.6).
+        features = HandFeatures(
+            x=0.5,
+            y=0.5,
+            z=0.0,
+            openness=1.0,
+            pinch=0.0,
+            index_x=0.5,
+            index_y=0.4,
+            thumb_x=0.5,
+            thumb_y=0.6,
+        )
+        state = HandState(
+            present=True,
+            features=features,
+            gesture="open",
+            motion=MotionState(False, False, 0, 0, None),
+        )
+        c.update(_frame(_absent(), state), now=0.0)
+        _sx, sy = mv.call_args[0]
+        # Midpoint y is (0.4 + 0.6) / 2 = 0.5.
+        _, sh = c._screen_w, c._screen_h  # type: ignore[attr-defined]
+        assert abs(sy / sh - 0.5) < 0.02  # small tolerance for smoothing first frame
+
+
+def test_cursor_smoothing_interpolates():
+    """After a big jump, the cursor should move less than the full delta."""
+    c = DesktopController(mirrored=False)
+    sw = c._screen_w  # type: ignore[attr-defined]
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor") as mv,
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+    ):
+        c.update(_frame(_absent(), _hand("open", 0.2, 0.5)), now=0.0)
+        first = mv.call_args[0]
+        c.update(_frame(_absent(), _hand("open", 0.8, 0.5)), now=0.033)
+        second = mv.call_args[0]
+        # Raw jump would be ~0.6*sw px; smoothed should be substantially less.
+        delta = second[0] - first[0]
+        raw_delta = 0.6 * sw
+        assert 0 < delta < raw_delta  # moved in the right direction but not all the way
+
+
+def test_create_commits_with_bounds_matching_fingertips():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_drag"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.new_finder_window") as nfw,
+    ):
+        # Arm with hands close.
+        c.update(
+            _frame(
+                _hand("open", 0.48, 0.5, pinch=0.95),
+                _hand("open", 0.52, 0.5, pinch=0.95),
+            ),
+            now=0.0,
+        )
+        # Pull apart to diagonal corners.
+        c.update(
+            _frame(
+                _hand("open", 0.2, 0.3, pinch=0.95),
+                _hand("open", 0.7, 0.75, pinch=0.95),
+            ),
+            now=0.1,
+        )
+        # Release both pinches → commit.
+        c.update(
+            _frame(
+                _hand("open", 0.2, 0.3, pinch=0.1),
+                _hand("open", 0.7, 0.75, pinch=0.1),
+            ),
+            now=0.2,
+        )
+        nfw.assert_called_once()
+        # Bounds kwarg should be present and describe the pulled-apart rect.
+        kwargs = nfw.call_args.kwargs
+        assert "bounds" in kwargs
+        x1, y1, x2, y2 = kwargs["bounds"]
+        sw = c._screen_w  # type: ignore[attr-defined]
+        # x-range: 0.2..0.7 in screen coords.
+        assert abs(x1 / sw - 0.2) < 0.02
+        assert abs(x2 / sw - 0.7) < 0.02
+
+
+def test_pending_create_bounds_exposes_live_rect():
+    c = DesktopController(mirrored=False)
+    assert c.pending_create_bounds() is None
+    c.update(
+        _frame(
+            _hand("open", 0.48, 0.5, pinch=0.95),
+            _hand("open", 0.52, 0.5, pinch=0.95),
+        ),
+        now=0.0,
+    )
+    # Now armed — moving should update.
+    c.update(
+        _frame(
+            _hand("open", 0.3, 0.3, pinch=0.95),
+            _hand("open", 0.7, 0.7, pinch=0.95),
+        ),
+        now=0.1,
+    )
+    rect = c.pending_create_bounds()
+    assert rect is not None
+    x, y, w_, h_ = rect
+    assert abs(x - 0.3) < 0.01
+    assert abs(y - 0.3) < 0.01
+    assert abs(w_ - 0.4) < 0.01
+    assert abs(h_ - 0.4) < 0.01
