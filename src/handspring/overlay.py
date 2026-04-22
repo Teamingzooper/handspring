@@ -137,6 +137,33 @@ if _AVAILABLE:
                 (ox, oy), hovered_root, hovered_sub, progress, root_items = radial
                 _draw_radial_tree(ctx, ox, oy, hovered_root, hovered_sub, progress, root_items)
 
+    def _pie_wedge_path(
+        ctx: Any,
+        ox: float,
+        oy: float,
+        r_inner: float,
+        r_outer: float,
+        start_angle: float,
+        end_angle: float,
+    ) -> None:
+        """Build an annular wedge path (ready to fill or stroke).
+
+        Angles are in radians, screen-convention (0 = +x, π/2 = +y = down).
+        For a solid pie slice (no inner cutout), pass r_inner=0.
+        """
+        Quartz.CGContextBeginPath(ctx)
+        if r_inner <= 0.5:
+            Quartz.CGContextMoveToPoint(ctx, ox, oy)
+            Quartz.CGContextAddArc(ctx, ox, oy, r_outer, start_angle, end_angle, False)
+        else:
+            # Annular wedge: inner arc → outer arc (reverse).
+            inner_start_x = ox + r_inner * math.cos(start_angle)
+            inner_start_y = oy + r_inner * math.sin(start_angle)
+            Quartz.CGContextMoveToPoint(ctx, inner_start_x, inner_start_y)
+            Quartz.CGContextAddArc(ctx, ox, oy, r_inner, start_angle, end_angle, False)
+            Quartz.CGContextAddArc(ctx, ox, oy, r_outer, end_angle, start_angle, True)
+        Quartz.CGContextClosePath(ctx)
+
     def _draw_radial_tree(
         ctx: Any,
         ox: float,
@@ -146,11 +173,12 @@ if _AVAILABLE:
         progress: float,
         root_items: tuple[tuple[str, tuple[str, ...]], ...],
     ) -> None:
-        r_root = 110.0
-        r_sub = 200.0
+        r_inner = 18.0  # center dead-zone visual
+        r_root = 110.0  # outer radius of root ring
+        r_sub_inner = 120.0  # gap between root and sub
+        r_sub = 210.0  # outer radius of sub ring
 
-        # During the hold countdown, show ONLY the filling arc at a small
-        # radius — no slices yet.
+        # During the hold countdown, show ONLY a thin filling arc — no slices.
         if progress < 1.0:
             Quartz.CGContextSetRGBStrokeColor(ctx, 0.75, 0.75, 0.75, 0.9)
             Quartz.CGContextSetLineWidth(ctx, 5.0)
@@ -160,67 +188,90 @@ if _AVAILABLE:
             Quartz.CGContextStrokePath(ctx)
             return
 
-        # Root ring background.
-        Quartz.CGContextSetRGBFillColor(ctx, 0.08, 0.08, 0.08, 0.7)
-        Quartz.CGContextFillEllipseInRect(
-            ctx, Quartz.CGRectMake(ox - r_root, oy - r_root, r_root * 2, r_root * 2)
-        )
-        Quartz.CGContextSetRGBStrokeColor(ctx, 0.60, 0.60, 0.60, 0.9)
-        Quartz.CGContextSetLineWidth(ctx, 1.5)
-        Quartz.CGContextStrokeEllipseInRect(
-            ctx, Quartz.CGRectMake(ox - r_root, oy - r_root, r_root * 2, r_root * 2)
-        )
-
-        # Root slice labels + dividers.
+        # --- Root ring: filled annular wedges ---
         n = len(root_items)
         slice_size = 2 * math.pi / n
         for i, (name, _) in enumerate(root_items):
-            screen_angle = -math.pi / 2 + i * slice_size
-            lx = ox + (r_root * 0.6) * math.cos(screen_angle)
-            ly = oy + (r_root * 0.6) * math.sin(screen_angle)
-            # Divider.
-            div_angle = -math.pi / 2 + (i - 0.5) * slice_size
-            dvx = ox + r_root * math.cos(div_angle)
-            dvy = oy + r_root * math.sin(div_angle)
-            Quartz.CGContextSetRGBStrokeColor(ctx, 0.30, 0.30, 0.30, 0.8)
-            Quartz.CGContextSetLineWidth(ctx, 1.0)
-            Quartz.CGContextBeginPath(ctx)
-            Quartz.CGContextMoveToPoint(ctx, ox, oy)
-            Quartz.CGContextAddLineToPoint(ctx, dvx, dvy)
-            Quartz.CGContextStrokePath(ctx)
+            # Slice i occupies the angular range centered on its cardinal direction.
+            start = -math.pi / 2 + (i - 0.5) * slice_size
+            end = start + slice_size
             highlighted = i == hovered_root
+            # Wedge fill.
+            _pie_wedge_path(ctx, ox, oy, r_inner, r_root, start, end)
+            if highlighted:
+                Quartz.CGContextSetRGBFillColor(ctx, 0.30, 0.30, 0.30, 0.85)
+            else:
+                Quartz.CGContextSetRGBFillColor(ctx, 0.10, 0.10, 0.10, 0.70)
+            Quartz.CGContextFillPath(ctx)
+            # Wedge outline.
+            _pie_wedge_path(ctx, ox, oy, r_inner, r_root, start, end)
+            if highlighted:
+                Quartz.CGContextSetRGBStrokeColor(ctx, 0.90, 0.90, 0.90, 0.95)
+                Quartz.CGContextSetLineWidth(ctx, 1.5)
+            else:
+                Quartz.CGContextSetRGBStrokeColor(ctx, 0.45, 0.45, 0.45, 0.80)
+                Quartz.CGContextSetLineWidth(ctx, 1.0)
+            Quartz.CGContextStrokePath(ctx)
+            # Label at the slice center.
+            center_angle = -math.pi / 2 + i * slice_size
+            lr = (r_inner + r_root) * 0.5
+            lx = ox + lr * math.cos(center_angle)
+            ly = oy + lr * math.sin(center_angle)
             color = (
-                AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.95, 0.95, 0.95, 1.0)
+                AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 1.0, 1.0, 1.0)
                 if highlighted
-                else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.75, 0.75, 0.75, 1.0)
+                else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.80, 0.80, 0.80, 1.0)
             )
             _draw_label(name, lx, ly, color, highlighted)
 
-        # Sub ring (only if hovered_root has subs AND hand is past the sub threshold).
-        if hovered_root is not None:
-            _name, subs = root_items[hovered_root]
-            if subs and hovered_sub is not None:
-                # Dim ring behind sub labels.
-                Quartz.CGContextSetRGBStrokeColor(ctx, 0.50, 0.50, 0.50, 0.6)
-                Quartz.CGContextSetLineWidth(ctx, 1.0)
-                Quartz.CGContextStrokeEllipseInRect(
-                    ctx, Quartz.CGRectMake(ox - r_sub, oy - r_sub, r_sub * 2, r_sub * 2)
+        # --- Sub ring: shown whenever hovered_root has children ---
+        if hovered_root is None:
+            return
+        _name, subs = root_items[hovered_root]
+        if not subs:
+            return
+        m = len(subs)
+        sub_slice = 2 * math.pi / m
+        # Hand has pushed out far enough = sub is actively "armed".
+        sub_armed = hovered_sub is not None
+        for j, sub_name in enumerate(subs):
+            start = -math.pi / 2 + (j - 0.5) * sub_slice
+            end = start + sub_slice
+            sub_highlighted = j == hovered_sub
+            _pie_wedge_path(ctx, ox, oy, r_sub_inner, r_sub, start, end)
+            if sub_highlighted:
+                # Bright green fill for the active sub selection.
+                Quartz.CGContextSetRGBFillColor(ctx, 0.28, 0.50, 0.10, 0.90)
+            elif sub_armed:
+                Quartz.CGContextSetRGBFillColor(ctx, 0.14, 0.14, 0.14, 0.70)
+            else:
+                # Preview — user is still in the root ring, but sub is shown
+                # so they know it's available. Low-opacity so it reads as
+                # "peripheral".
+                Quartz.CGContextSetRGBFillColor(ctx, 0.10, 0.10, 0.10, 0.45)
+            Quartz.CGContextFillPath(ctx)
+            _pie_wedge_path(ctx, ox, oy, r_sub_inner, r_sub, start, end)
+            if sub_highlighted:
+                Quartz.CGContextSetRGBStrokeColor(ctx, 0.53, 1.0, 0.0, 1.0)
+                Quartz.CGContextSetLineWidth(ctx, 1.5)
+            else:
+                Quartz.CGContextSetRGBStrokeColor(
+                    ctx, 0.40, 0.40, 0.40, 0.85 if sub_armed else 0.55
                 )
-                m = len(subs)
-                sub_slice = 2 * math.pi / m
-                for j, sub_name in enumerate(subs):
-                    sangle = -math.pi / 2 + j * sub_slice
-                    slx = ox + (r_sub * 0.88) * math.cos(sangle)
-                    sly = oy + (r_sub * 0.88) * math.sin(sangle)
-                    sub_highlighted = j == hovered_sub
-                    color = (
-                        AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.53, 1.0, 0.0, 1.0)
-                        if sub_highlighted
-                        else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                            0.80, 0.80, 0.80, 0.9
-                        )
-                    )
-                    _draw_label(sub_name, slx, sly, color, sub_highlighted)
+                Quartz.CGContextSetLineWidth(ctx, 1.0)
+            Quartz.CGContextStrokePath(ctx)
+            center_angle = -math.pi / 2 + j * sub_slice
+            slr = (r_sub_inner + r_sub) * 0.5
+            slx = ox + slr * math.cos(center_angle)
+            sly = oy + slr * math.sin(center_angle)
+            color = (
+                AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.60, 1.0, 0.20, 1.0)
+                if sub_highlighted
+                else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.85, 0.85, 0.85, 0.95 if sub_armed else 0.65
+                )
+            )
+            _draw_label(sub_name, slx, sly, color, sub_highlighted)
 
     def _draw_label(text: str, cx: float, cy: float, color: Any, bold: bool) -> None:
         attrs = {
