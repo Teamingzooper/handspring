@@ -29,6 +29,9 @@ _BONE_THICKNESS = 3
 _BONE_SHADOW_THICKNESS = 5  # draw shadow first for contrast on bright backgrounds
 _DOT_RADIUS = 3
 
+_PINCH_CLOSE_DISTANCE = 0.05  # geometric threshold for "pinching" visual
+_CREATE_READY_DISTANCE = 0.08  # Jarvis create-entry threshold (matches jarvis.py)
+
 # Drawing specs for hand + face (MediaPipe drawing_utils path).
 _DOT_SPEC = mp.solutions.drawing_utils.DrawingSpec(
     color=_DOT_COLOR, thickness=-1, circle_radius=_DOT_RADIUS
@@ -92,6 +95,8 @@ class Preview:
                 landmark_drawing_spec=_DOT_SPEC,
                 connection_drawing_spec=_LINE_SPEC,
             )
+
+        _draw_pinch_viz(display, hand_landmark_lists)
 
         _draw_status(display, frame_result, osc_target)
 
@@ -369,6 +374,87 @@ def _label(frame: NDArray[np.uint8], x: int, y: int, text: str) -> None:
     cv2.putText(
         frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (230, 230, 230), 1, cv2.LINE_AA
     )
+
+
+def _dotted_line(
+    frame: NDArray[np.uint8],
+    pt1: tuple[int, int],
+    pt2: tuple[int, int],
+    color: tuple[int, int, int],
+    thickness: int = 1,
+    gap: int = 8,
+) -> None:
+    """Draw a dotted line from pt1 to pt2 with short dashes separated by `gap` px."""
+    x1, y1 = pt1
+    x2, y2 = pt2
+    dist = int(np.hypot(x2 - x1, y2 - y1))
+    if dist == 0:
+        return
+    n_dots = max(dist // gap, 1)
+    for i in range(n_dots):
+        t = i / max(n_dots - 1, 1)
+        x = int(x1 + (x2 - x1) * t)
+        y = int(y1 + (y2 - y1) * t)
+        cv2.circle(frame, (x, y), thickness + 1, color, -1, cv2.LINE_AA)
+
+
+def _label_with_shadow(
+    frame: NDArray[np.uint8], x: int, y: int, text: str, color: tuple[int, int, int]
+) -> None:
+    cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA)
+    cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+
+
+def _draw_pinch_viz(
+    frame: NDArray[np.uint8],
+    hand_landmark_lists: list[Any],  # already in display coords (mirroring already applied)
+) -> None:
+    """Draw per-hand thumb→index pinch lines and an inter-hand line when both pinching."""
+    h, w = frame.shape[:2]
+    close_index_tips: list[tuple[int, int]] = []
+
+    for ll in hand_landmark_lists:
+        thumb = ll.landmark[4]
+        index = ll.landmark[8]
+        tx_n, ty_n = thumb.x, thumb.y
+        ix_n, iy_n = index.x, index.y
+        dist = float(np.hypot(ix_n - tx_n, iy_n - ty_n))
+        is_close = dist < _PINCH_CLOSE_DISTANCE
+
+        tx_px = int(tx_n * w)
+        ty_px = int(ty_n * h)
+        ix_px = int(ix_n * w)
+        iy_px = int(iy_n * h)
+
+        if is_close:
+            cv2.line(frame, (tx_px, ty_px), (ix_px, iy_px), (136, 255, 0), 3, cv2.LINE_AA)
+            mid = ((tx_px + ix_px) // 2, (ty_px + iy_px) // 2)
+            cv2.circle(frame, mid, 6, (136, 255, 0), -1, cv2.LINE_AA)
+            close_index_tips.append((ix_px, iy_px))
+        else:
+            _dotted_line(frame, (tx_px, ty_px), (ix_px, iy_px), (150, 150, 150), 1, gap=10)
+
+        # Distance label slightly above the midpoint.
+        mx = (tx_px + ix_px) // 2
+        my = (ty_px + iy_px) // 2 - 14
+        text = f"{dist:.3f}"
+        color = (136, 255, 0) if is_close else (200, 200, 200)
+        _label_with_shadow(frame, mx, my, text, color)
+
+    # Inter-hand line when both hands are geometrically "close" (pinching).
+    if len(close_index_tips) == 2:
+        p1, p2 = close_index_tips
+        # Compute normalized distance using pixel distance / frame width.
+        px_dist = float(np.hypot(p1[0] - p2[0], p1[1] - p2[1]))
+        norm_dist = px_dist / w
+        ready = norm_dist < _CREATE_READY_DISTANCE
+        line_color = (136, 255, 0) if ready else (0, 230, 230)
+        if ready:
+            cv2.line(frame, p1, p2, line_color, 3, cv2.LINE_AA)
+        else:
+            _dotted_line(frame, p1, p2, line_color, 1, gap=10)
+        mid = ((p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2 - 14)
+        _label_with_shadow(frame, mid[0], mid[1], f"{norm_dist:.3f}", line_color)
 
 
 def _mirror_landmarks(landmark_list: Any) -> Any:
