@@ -114,6 +114,7 @@ _TAP_HOVER_FRAMES = 5  # 5 frames @ 30fps ≈ 150 ms
 _TAP_COOLDOWN_SECONDS = 0.4
 _MIN_WINDOW_DIAGONAL = 0.1
 _PINCH_ON_THRESHOLD = 0.85
+_CREATE_ENTRY_DISTANCE = 0.08
 
 
 @dataclass
@@ -186,28 +187,36 @@ class JarvisController:
             and left.features.pinch >= _PINCH_ON_THRESHOLD
             and right.features.pinch >= _PINCH_ON_THRESHOLD
         )
-        if both_pinching:
-            if self._create is None:
-                assert left.features is not None
-                assert right.features is not None
-                self._create = _CreateState(
-                    start_left=(left.features.x, left.features.y),
-                    start_right=(right.features.x, right.features.y),
-                )
+        if self._create is None:
+            # Entry requires both pinching AND index tips close together.
+            if both_pinching and left.features is not None and right.features is not None:
+                dx = left.features.index_x - right.features.index_x
+                dy = left.features.index_y - right.features.index_y
+                distance = (dx * dx + dy * dy) ** 0.5
+                if distance < _CREATE_ENTRY_DISTANCE:
+                    self._create = _CreateState(
+                        start_left=(left.features.index_x, left.features.index_y),
+                        start_right=(right.features.index_x, right.features.index_y),
+                    )
             return
 
-        # If we were in a create gesture and now lost pinch on either hand, commit.
-        if self._create is not None and left.features is not None and right.features is not None:
-            # Use current (at-release) positions as the rectangle corners.
-            x1, y1 = left.features.x, left.features.y
-            x2, y2 = right.features.x, right.features.y
+        # Already creating.
+        if both_pinching and left.features is not None and right.features is not None:
+            # Still in the gesture — do nothing (preview rendering reads
+            # `_create` + current frame to draw live preview rectangle; see
+            # WindowManager.preview_rect below).
+            return
+
+        # Released — commit with current (at-release) index tip positions.
+        if left.features is not None and right.features is not None:
+            x1, y1 = left.features.index_x, left.features.index_y
+            x2, y2 = right.features.index_x, right.features.index_y
             x_min, x_max = min(x1, x2), max(x1, x2)
             y_min, y_max = min(y1, y2), max(y1, y2)
             w = x_max - x_min
             h = y_max - y_min
             diag = (w * w + h * h) ** 0.5
             if diag >= _MIN_WINDOW_DIAGONAL:
-                # Clamp aspect ratio to [0.5, 2.0]
                 if w > 0 and h > 0:
                     ar = w / h
                     if ar < 0.5:

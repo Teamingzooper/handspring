@@ -135,23 +135,76 @@ def _frame(left: HandState, right: HandState) -> FrameResult:
     )
 
 
-def test_both_pinch_and_pull_creates_window():
+def test_pinch_fingertips_together_then_pull_creates_window():
     c = JarvisController()
-    # Start: both hands close together, pinching.
-    c.update(_frame(_hand("fist", 0.4, 0.5, pinch=0.95), _hand("fist", 0.5, 0.5, pinch=0.95)))
-    assert c.manager.windows() == []  # not created yet (still pinching)
-    # Pull apart.
-    c.update(_frame(_hand("fist", 0.25, 0.35, pinch=0.95), _hand("fist", 0.65, 0.65, pinch=0.95)))
-    # Release one hand's pinch → commit.
-    c.update(_frame(_hand("fist", 0.25, 0.35, pinch=0.2), _hand("fist", 0.65, 0.65, pinch=0.95)))
+    # Hands start pinching with index tips almost touching (distance < 0.08).
+    # x positions 0.48 and 0.52 → distance 0.04 < 0.08.
+    c.update(
+        _frame(
+            _hand("fist", 0.48, 0.5, pinch=0.95),
+            _hand("fist", 0.52, 0.5, pinch=0.95),
+        )
+    )
+    assert c.manager.windows() == []  # still in creation gesture
+    # Pull apart — hands move to 0.25 and 0.75.
+    c.update(
+        _frame(
+            _hand("fist", 0.25, 0.35, pinch=0.95),
+            _hand("fist", 0.75, 0.65, pinch=0.95),
+        )
+    )
+    # Release left pinch → commit.
+    c.update(
+        _frame(
+            _hand("fist", 0.25, 0.35, pinch=0.2),
+            _hand("fist", 0.75, 0.65, pinch=0.95),
+        )
+    )
     assert len(c.manager.windows()) == 1
+    w = c.manager.windows()[0]
+    # Window should span from 0.25..0.75 in x, 0.35..0.65 in y.
+    assert abs(w.x - 0.25) < 1e-6
+    assert abs(w.y - 0.35) < 1e-6
+    # Aspect ratio 0.5/0.3 ≈ 1.67 < 2.0, no clamp.
+    assert abs(w.width - 0.5) < 1e-6
+    assert abs(w.height - 0.3) < 1e-6
 
 
-def test_tiny_pull_discarded():
+def test_no_create_if_fingertips_far_apart_at_pinch_start():
     c = JarvisController()
-    c.update(_frame(_hand("fist", 0.45, 0.50, pinch=0.95), _hand("fist", 0.47, 0.50, pinch=0.95)))
-    # Release at almost-identical positions — diagonal < 0.1.
-    c.update(_frame(_hand("fist", 0.45, 0.50, pinch=0.2), _hand("fist", 0.47, 0.50, pinch=0.95)))
+    # Both pinching but hands far apart from the start.
+    c.update(
+        _frame(
+            _hand("fist", 0.2, 0.5, pinch=0.95),
+            _hand("fist", 0.8, 0.5, pinch=0.95),
+        )
+    )
+    # Release — should NOT commit (was never in create state).
+    c.update(
+        _frame(
+            _hand("fist", 0.2, 0.5, pinch=0.2),
+            _hand("fist", 0.8, 0.5, pinch=0.2),
+        )
+    )
+    assert c.manager.windows() == []
+
+
+def test_tiny_pull_still_discarded():
+    # Keep this test's spirit — tiny final diagonal → no window.
+    c = JarvisController()
+    c.update(
+        _frame(
+            _hand("fist", 0.495, 0.5, pinch=0.95),
+            _hand("fist", 0.505, 0.5, pinch=0.95),
+        )
+    )
+    # Release without pulling apart.
+    c.update(
+        _frame(
+            _hand("fist", 0.495, 0.5, pinch=0.2),
+            _hand("fist", 0.505, 0.5, pinch=0.95),
+        )
+    )
     assert c.manager.windows() == []
 
 
