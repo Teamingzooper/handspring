@@ -129,6 +129,48 @@ def launch_app(name: str) -> None:
         )
 
 
+def new_app_window(name: str, bounds: tuple[int, int, int, int] | None = None) -> None:
+    """Open a new window of ``name`` and optionally position it.
+
+    Finder gets AppleScript's native ``make new Finder window``. Other apps
+    get activated then fired Cmd+N via System Events — works for Safari,
+    Chrome, Notes, Terminal, TextEdit, and most apps with a standard "New
+    Window" menu item. Bounds are applied afterward via the AX API so it
+    works regardless of the app.
+    """
+    if not _MAC:
+        return
+    if name == "Finder":
+        new_finder_window(bounds=bounds)
+        return
+    # Activate the app and fire Cmd+N.
+    script = (
+        f'tell application "{name}" to activate\n'
+        "delay 0.15\n"
+        'tell application "System Events" to keystroke "n" using {command down}\n'
+    )
+    if bounds is not None:
+        x, y, x2, y2 = bounds
+        script += (
+            "delay 0.3\n"
+            'tell application "System Events"\n'
+            f'    tell process "{name}"\n'
+            f"        try\n"
+            f"            set position of front window to {{{x}, {y}}}\n"
+            f"            set size of front window to {{{x2 - x}, {y2 - y}}}\n"
+            f"        end try\n"
+            "    end tell\n"
+            "end tell\n"
+        )
+    with contextlib.suppress(subprocess.TimeoutExpired, FileNotFoundError):
+        subprocess.run(
+            ["osascript", "-e", script],
+            check=False,
+            capture_output=True,
+            timeout=3.0,
+        )
+
+
 def close_frontmost_window() -> None:
     """Close the frontmost window of the active application (Cmd+W)."""
     if not _MAC:

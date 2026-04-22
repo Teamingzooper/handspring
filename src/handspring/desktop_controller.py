@@ -95,6 +95,17 @@ class DesktopController:
         self._failsafe_start: float | None = None
         self._screen_w, self._screen_h = os_control.screen_size()
         self._events_out: list[str] = []
+        # App to spawn on the next both-hand-pinch-pull-apart. Defaults to Finder.
+        self._selected_app: str = _RADIAL_APPS[0]
+        # Exposed for the native overlay: left-hand midpoint in screen pixels.
+        self._left_cursor_screen: tuple[int, int] | None = None
+
+    def selected_app(self) -> str:
+        return self._selected_app
+
+    def left_cursor_screen(self) -> tuple[int, int] | None:
+        """Screen pixel coords for the left hand (for the native overlay)."""
+        return self._left_cursor_screen
 
     def enabled(self) -> bool:
         return not self._disabled
@@ -276,14 +287,41 @@ class DesktopController:
     def _handle_radial(self, frame: FrameResult, now: float) -> None:
         r = self._radial
         left = frame.left
-        pinching = is_pinching(left) and left.features is not None
+        right = frame.right
+
+        # Track the left-hand screen-space position for the native overlay,
+        # regardless of radial state.
+        if left.present and left.features is not None:
+            lf = left.features
+            lmx = (lf.index_x + lf.thumb_x) * 0.5
+            lmy = (lf.index_y + lf.thumb_y) * 0.5
+            if self._mirrored:
+                lmx = 1.0 - lmx
+            span = 1.0 - 2 * _CURSOR_INSET
+            sx = int(((lmx - _CURSOR_INSET) / span) * self._screen_w)
+            sy = int(((lmy - _CURSOR_INSET) / span) * self._screen_h)
+            sx = max(0, min(self._screen_w - 1, sx))
+            sy = max(0, min(self._screen_h - 1, sy))
+            self._left_cursor_screen = (sx, sy)
+        else:
+            self._left_cursor_screen = None
+
+        # If right hand is pinching, we're either clicking or in the middle of
+        # a both-hand-create gesture — suppress the radial entirely so left
+        # pinches don't also pop the wheel.
+        right_pinching = is_pinching(right)
+        pinching = (
+            is_pinching(left)
+            and left.features is not None
+            and not right_pinching
+            and not self._create.armed
+        )
 
         if not pinching:
             if r.pinching and r.active and r.selected is not None:
-                # Commit: launch the highlighted app.
-                app = _RADIAL_APPS[r.selected]
-                os_control.launch_app(app)
-                self._events_out.append(f"launch:{app}")
+                # Commit: SET the selected-app, don't launch anything yet.
+                self._selected_app = _RADIAL_APPS[r.selected]
+                self._events_out.append(f"select_app:{self._selected_app}")
             # Reset everything.
             r.pinching = False
             r.active = False
@@ -367,8 +405,8 @@ class DesktopController:
                         bx2 = bx1 + 200
                     if by2 - by1 < 150:
                         by2 = by1 + 150
-                    os_control.new_finder_window(bounds=(bx1, by1, bx2, by2))
-                    self._events_out.append("new_finder_window")
+                    os_control.new_app_window(self._selected_app, bounds=(bx1, by1, bx2, by2))
+                    self._events_out.append(f"new_window:{self._selected_app}")
                 self._create.armed = False
             return
         assert left.features is not None and right.features is not None

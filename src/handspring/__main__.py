@@ -26,7 +26,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from handspring import __version__, os_control
+from handspring import __version__, os_control, overlay
 from handspring.desktop_controller import DesktopController
 from handspring.osc_out import OscEmitter
 from handspring.preview import Preview
@@ -62,13 +62,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--web-port", type=int, default=8765, help="web stream port (default: 8765)")
     p.add_argument("--no-web", action="store_true", help="disable the MJPEG web server")
     p.add_argument(
+        "--no-overlay",
+        dest="overlay",
+        action="store_false",
+        help="disable the always-on-top left-hand cursor + radial overlay",
+    )
+    p.add_argument(
         "--fps-log-interval",
         type=float,
         default=0.5,
         help="print FPS + state to terminal every N seconds (default: 0.5)",
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    p.set_defaults(mirror=True, os_control=True)
+    p.set_defaults(mirror=True, os_control=True, overlay=True)
     return p.parse_args(argv)
 
 
@@ -109,6 +115,12 @@ def main(argv: list[str] | None = None) -> int:
         web = WebServer(port=args.web_port, latest=latest)
         web.start()
 
+    overlay_inst: overlay.Overlay | None = None
+    if args.overlay and overlay.available():
+        overlay_inst = overlay.Overlay()
+        if not overlay_inst.start():
+            overlay_inst = None
+
     shutdown = _Shutdown()
 
     print(f"handspring {__version__}", flush=True)
@@ -128,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
             print("OS control: requested but unavailable on this platform", flush=True)
     else:
         print("OS control: OFF (--no-os-control)", flush=True)
+    if overlay_inst is not None:
+        print("Overlay:    ON  (left-hand dot + radial float above all apps)", flush=True)
+    elif args.overlay:
+        print("Overlay:    requested but unavailable", flush=True)
     print("Failsafe: hold BOTH fists for 5s to toggle gesture control.", flush=True)
     print("Ctrl+C to quit.", flush=True)
 
@@ -146,6 +162,29 @@ def main(argv: list[str] | None = None) -> int:
 
             if desktop is not None:
                 desktop.update(result, now=now)
+
+            # Push state into the native overlay (if enabled) and pump
+            # AppKit events so the window redraws.
+            if overlay_inst is not None and desktop is not None:
+                rs = desktop.radial_state()
+                radial_payload: (
+                    tuple[tuple[int, int], int | None, float, tuple[str, ...]] | None
+                ) = None
+                if rs is not None:
+                    origin_raw, _cur_raw, selected, progress = rs
+                    # Convert raw camera coords to screen coords (reuse the
+                    # same inset mapping as the cursor).
+                    screen_origin = _cam_to_screen(
+                        origin_raw[0], origin_raw[1], desktop, mirrored=args.mirror
+                    )
+                    radial_payload = (screen_origin, selected, progress, desktop.radial_apps())
+                overlay.set_state(
+                    cursor=desktop.left_cursor_screen(),
+                    radial=radial_payload,
+                    selected_app=desktop.selected_app(),
+                )
+                overlay_inst.redraw()
+                overlay_inst.pump()
 
             if not preview.render(
                 bgr,
@@ -181,9 +220,33 @@ def main(argv: list[str] | None = None) -> int:
         preview.close()
         if web is not None:
             web.stop()
+        if overlay_inst is not None:
+            overlay_inst.stop()
         cv2.destroyAllWindows()
     print()
     return 0
+
+
+def _cam_to_screen(
+    cam_x: float,
+    cam_y: float,
+    desktop: DesktopController,
+    *,
+    mirrored: bool,
+) -> tuple[int, int]:
+    """Apply the same mirror + inset mapping the cursor uses."""
+    from handspring.desktop_controller import _CURSOR_INSET  # local to avoid reimport
+
+    nx = 1.0 - cam_x if mirrored else cam_x
+    ny = cam_y
+    span = 1.0 - 2 * _CURSOR_INSET
+    mx = (nx - _CURSOR_INSET) / span
+    my = (ny - _CURSOR_INSET) / span
+    sw = desktop._screen_w  # noqa: SLF001
+    sh = desktop._screen_h  # noqa: SLF001
+    sx = max(0, min(sw - 1, int(mx * sw)))
+    sy = max(0, min(sh - 1, int(my * sh)))
+    return sx, sy
 
 
 def _overlay_status(
