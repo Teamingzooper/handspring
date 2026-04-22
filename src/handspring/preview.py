@@ -10,12 +10,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from handspring.app_mode import AppMode
-from handspring.jarvis import (
-    WINDOW_COLORS,
-    JarvisController,
-    bbox_top_right,
-    project_window_corners,
-)
+from handspring.jarvis import WINDOW_COLORS, JarvisController
 from handspring.synth_params import SynthSnapshot
 from handspring.synth_ui import UiHint
 from handspring.types import FrameResult
@@ -228,100 +223,49 @@ def _draw_mode_badge(frame: NDArray[np.uint8], mode: AppMode) -> None:
         )
 
 
-def _project_to_pixels(win: Any, w: int, h: int, *, mirrored: bool) -> NDArray[np.int32]:
-    """Wrap project_window_corners to return pixel-space int coords."""
-    corners = project_window_corners(win, mirrored=mirrored)
-    pix = np.zeros((4, 2), dtype=np.int32)
-    for i in range(4):
-        pix[i] = (int(corners[i, 0] * w), int(corners[i, 1] * h))
-    return pix
-
-
 def _draw_jarvis(frame: NDArray[np.uint8], jarvis: JarvisController, *, mirrored: bool) -> None:
     h, w = frame.shape[:2]
     overlay = frame.copy()
     alpha = 0.35
 
-    # Sort windows back-to-front by effective depth (farther first) so near
-    # windows occlude far ones correctly.
-    sorted_windows = sorted(jarvis.manager.windows(), key=lambda win: -win.depth)
-
-    projected: list[tuple[Any, NDArray[np.int32]]] = []
-    for win in sorted_windows:
-        quad = _project_to_pixels(win, w, h, mirrored=mirrored)
-        projected.append((win, quad))
+    for win in jarvis.manager.windows():
+        x0_n = 1.0 - (win.x + win.width) if mirrored else win.x
+        x0 = int(x0_n * w)
+        y0 = int(win.y * h)
+        x1 = int((x0_n + win.width) * w)
+        y1 = int((win.y + win.height) * h)
         fill = WINDOW_COLORS[win.color_idx]
-        cv2.fillPoly(overlay, [quad], fill)
+        cv2.rectangle(overlay, (x0, y0), (x1, y1), fill, -1)
 
-    # Composite overlay onto frame with alpha.
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, dst=frame)
 
-    # Borders, titles, resize handles drawn on top (fully opaque).
-    for win, quad in projected:
+    for win in jarvis.manager.windows():
+        x0_n = 1.0 - (win.x + win.width) if mirrored else win.x
+        x0 = int(x0_n * w)
+        y0 = int(win.y * h)
+        x1 = int((x0_n + win.width) * w)
+        y1 = int((win.y + win.height) * h)
+
         border = WINDOW_COLORS[win.color_idx]
-        cv2.polylines(frame, [quad], isClosed=True, color=border, thickness=2)
-        # Title bar: the top sliver of the quad (top edge → 15% down toward bottom edges).
-        tl, tr, br, bl = quad[0], quad[1], quad[2], quad[3]
-        title_t = 0.15
-        title_bl = (
-            int(tl[0] + (bl[0] - tl[0]) * title_t),
-            int(tl[1] + (bl[1] - tl[1]) * title_t),
-        )
-        title_br = (
-            int(tr[0] + (br[0] - tr[0]) * title_t),
-            int(tr[1] + (br[1] - tr[1]) * title_t),
-        )
-        title_quad = np.array([tl, tr, title_br, title_bl], dtype=np.int32)
-        cv2.fillPoly(frame, [title_quad], border)
-        # Label placed near the TL corner, no rotation — legibility > realism.
+        cv2.rectangle(frame, (x0, y0), (x1, y1), border, 2)
+        cv2.rectangle(frame, (x0, y0), (x1, min(y0 + 22, y1)), border, -1)
         cv2.putText(
             frame,
             f"Window {win.id}",
-            (int(tl[0]) + 8, int(tl[1]) + 18),
+            (x0 + 8, y0 + 16),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
             (20, 20, 20),
             1,
             cv2.LINE_AA,
         )
-        # Resize handle locked to the axis-aligned bbox TOP-RIGHT of the
-        # projected quad. Stable regardless of rotation — always readable.
+        # Resize handle at the displayed top-right (x1 pixel column).
         resizing_id = jarvis.resizing_window_id()
         handle_color = (136, 255, 0) if resizing_id == win.id else (100, 200, 255)
         handle_size = 28 if resizing_id == win.id else 22
-        corners_screen = project_window_corners(win, mirrored=mirrored)
-        hsx, hsy = bbox_top_right(corners_screen)
-        hx, hy = int(hsx * w), int(hsy * h)
+        hx, hy = x1, y0
         cv2.rectangle(frame, (hx - handle_size, hy), (hx, hy + handle_size), handle_color, -1)
         cv2.rectangle(frame, (hx - handle_size, hy), (hx, hy + handle_size), (30, 30, 30), 1)
-        # Depth readout on the bottom-left corner for visual debugging / feel.
-        if (
-            abs(win.depth) > 0.01
-            or abs(win.roll) > 0.05
-            or abs(win.pitch) > 0.05
-            or abs(win.yaw) > 0.05
-        ):
-            tag = f"z{win.depth:+.2f}"
-            cv2.putText(
-                frame,
-                tag,
-                (int(bl[0]) + 6, int(bl[1]) - 6),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.4,
-                (20, 20, 20),
-                3,
-                cv2.LINE_AA,
-            )
-            cv2.putText(
-                frame,
-                tag,
-                (int(bl[0]) + 6, int(bl[1]) - 6),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.4,
-                (220, 255, 220),
-                1,
-                cv2.LINE_AA,
-            )
 
     # Destroy zone: thin red strip at the bottom. Tints brighter when a grab
     # enters it — telegraphs "release here to delete".

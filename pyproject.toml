@@ -1,6 +1,6 @@
 [project]
 name = "handspring"
-version = "0.7.1"
+version = "0.8.0"
 description = "Webcam gesture → OSC stream for creative coding"
 readme = "README.md"
 license = { text = "MIT" }
@@ -23,6 +23,7 @@ dev = [
 
 [project.scripts]
 handspring = "handspring.__main__:main"
+handspring-synth = "handspring.synth_app:main"
 
 [build-system]
 requires = ["hatchling"]

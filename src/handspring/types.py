@@ -39,16 +39,6 @@ class HandFeatures:
     index_y: float
     thumb_x: float
     thumb_y: float
-    # Palm orientation (radians). Computed from landmark geometry.
-    # roll = rotation in image plane (wrist→middle-MCP angle, 0 = pointing up).
-    # pitch = tilt forward/back (positive = fingers toward camera).
-    # yaw = left/right tilt around palm axis (positive = pinky-side forward).
-    palm_roll: float = 0.0
-    palm_pitch: float = 0.0
-    palm_yaw: float = 0.0
-    # 2D wrist→middle-MCP distance in the image plane. A robust proxy for
-    # how close the hand is to the camera (closer hand → bigger span).
-    palm_span: float = 0.0
 
 
 @dataclass(frozen=True)

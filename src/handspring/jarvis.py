@@ -3,18 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any
-
-import numpy as np
-from numpy.typing import NDArray
 
 from handspring.features import is_pinching
 from handspring.types import FrameResult, HandState, Side
-
-# Perspective focal length for window projection. Shared between the
-# controller (for hit-testing the resize handle) and the preview (for
-# rendering the quads).
-WINDOW_FOCAL = 1.4
 
 _MAX_WINDOWS_DEFAULT = 8
 _NUM_COLORS = 3
@@ -37,12 +28,6 @@ class Window:
     height: float
     z: int  # z-order index (higher = on top)
     color_idx: int  # index into WINDOW_COLORS
-    # 3D pose. depth = signed distance from neutral plane (negative = closer
-    # to camera → appears larger). roll/pitch/yaw in radians.
-    depth: float = 0.0
-    roll: float = 0.0
-    pitch: float = 0.0
-    yaw: float = 0.0
 
     def contains(self, px: float, py: float) -> bool:
         return self.x <= px <= self.x + self.width and self.y <= py <= self.y + self.height
@@ -50,53 +35,6 @@ class Window:
     @property
     def center(self) -> tuple[float, float]:
         return self.x + self.width / 2.0, self.y + self.height / 2.0
-
-
-def project_window_corners(win: Window, *, mirrored: bool) -> NDArray[np.floating[Any]]:
-    """Project a window's 4 corners through its 3D pose to 2D screen-space
-    coords in the range [0, 1]. Returns (4, 2): TL, TR, BR, BL.
-
-    When ``mirrored`` is True, the x-axis is flipped at the end (to match
-    cv2.flip-style selfie preview).
-    """
-    cx = win.x + win.width / 2.0
-    cy = win.y + win.height / 2.0
-    hw = win.width / 2.0
-    hh = win.height / 2.0
-    local = np.array(
-        [
-            [-hw, -hh, 0.0],
-            [+hw, -hh, 0.0],
-            [+hw, +hh, 0.0],
-            [-hw, +hh, 0.0],
-        ],
-        dtype=np.float64,
-    )
-    cr, sr = np.cos(win.roll), np.sin(win.roll)
-    cp, sp = np.cos(win.pitch), np.sin(win.pitch)
-    cy_, sy_ = np.cos(win.yaw), np.sin(win.yaw)
-    r_z = np.array([[cr, -sr, 0], [sr, cr, 0], [0, 0, 1]], dtype=np.float64)
-    r_x = np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]], dtype=np.float64)
-    r_y = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]], dtype=np.float64)
-    rotated = local @ r_z.T @ r_x.T @ r_y.T
-    out = np.zeros((4, 2), dtype=np.float64)
-    for i, p in enumerate(rotated):
-        denom = WINDOW_FOCAL + win.depth + float(p[2])
-        if denom < 0.2:
-            denom = 0.2
-        px = cx + float(p[0]) * (WINDOW_FOCAL / denom)
-        py = cy + float(p[1]) * (WINDOW_FOCAL / denom)
-        if mirrored:
-            px = 1.0 - px
-        out[i] = (px, py)
-    return out
-
-
-def bbox_top_right(corners: NDArray[np.floating[Any]]) -> tuple[float, float]:
-    """Top-right of the axis-aligned bounding box of the projected quad."""
-    xs = corners[:, 0]
-    ys = corners[:, 1]
-    return float(xs.max()), float(ys.min())
 
 
 class WindowManager:
@@ -165,20 +103,6 @@ class WindowManager:
     def destroy(self, window_id: int) -> None:
         self._windows = [w for w in self._windows if w.id != window_id]
 
-    def set_pose(
-        self,
-        window_id: int,
-        *,
-        depth: float,
-        roll: float,
-        pitch: float,
-        yaw: float,
-    ) -> None:
-        w = self.get(window_id)
-        if w is None:
-            return
-        self._replace(replace(w, depth=depth, roll=roll, pitch=pitch, yaw=yaw))
-
     def _replace(self, new_w: Window) -> None:
         for i, w in enumerate(self._windows):
             if w.id == new_w.id:
@@ -214,16 +138,6 @@ class _GrabState:
     side: Side
     last_palm_x: float
     last_palm_y: float
-    # Pose snapshots at grab start (palm and window). Deltas from these drive
-    # the window's 3D pose.
-    start_palm_span: float
-    start_palm_roll: float
-    start_palm_pitch: float
-    start_palm_yaw: float
-    start_win_depth: float
-    start_win_roll: float
-    start_win_pitch: float
-    start_win_yaw: float
 
 
 @dataclass
@@ -352,19 +266,16 @@ class JarvisController:
                 continue
             fx = state.features.index_x
             fy = state.features.index_y
-            # Compare in SCREEN space so the hit test always matches the
-            # visible handle, no matter how the window is rotated or how deep
-            # it sits. The handle lives at the axis-aligned bbox top-right of
-            # the projected quad, so we compute that per-window.
-            finger_screen_x = (1.0 - fx) if self._mirrored else fx
-            finger_screen_y = fy
+            # Check topmost window whose displayed top-right corner is within
+            # radius. When mirrored, the visible top-right corresponds to the
+            # raw top-LEFT of the window (x) because features are in raw coords.
             best: tuple[int, float] | None = None  # (z, window_id)
             target_window = None
             for w in self.manager.windows():
-                corners = project_window_corners(w, mirrored=self._mirrored)
-                handle_sx, handle_sy = bbox_top_right(corners)
-                dx = finger_screen_x - handle_sx
-                dy = finger_screen_y - handle_sy
+                corner_x = w.x if self._mirrored else w.x + w.width
+                corner_y = w.y
+                dx = fx - corner_x
+                dy = fy - corner_y
                 if dx * dx + dy * dy < _RESIZE_CORNER_RADIUS**2 and (best is None or w.z > best[0]):
                     best = (w.z, w.id)
                     target_window = w
@@ -466,20 +377,11 @@ class JarvisController:
                 if target is None:
                     continue
                 self.manager.promote(target.id)
-                f = state.features
                 self._grab = _GrabState(
                     window_id=target.id,
                     side=side,  # type: ignore[arg-type]
-                    last_palm_x=f.x,
-                    last_palm_y=f.y,
-                    start_palm_span=max(f.palm_span, 1e-3),
-                    start_palm_roll=f.palm_roll,
-                    start_palm_pitch=f.palm_pitch,
-                    start_palm_yaw=f.palm_yaw,
-                    start_win_depth=target.depth,
-                    start_win_roll=target.roll,
-                    start_win_pitch=target.pitch,
-                    start_win_yaw=target.yaw,
+                    last_palm_x=state.features.x,
+                    last_palm_y=state.features.y,
                 )
                 return
             return
@@ -494,28 +396,10 @@ class JarvisController:
                 self._events_out.append(("destroyed", grab.window_id))
             self._grab = None
             return
-        f = state.features
-        dx = f.x - grab.last_palm_x
-        dy = f.y - grab.last_palm_y
+        dx = state.features.x - grab.last_palm_x
+        dy = state.features.y - grab.last_palm_y
         self.manager.move(grab.window_id, dx=dx, dy=dy)
-        # Depth driven by hand-span RATIO (stable proxy for distance to
-        # camera). If hand grows, window comes closer. Scale factor follows
-        # perspective formula so the window grows by the same factor the hand did.
-        span_now = max(f.palm_span, 1e-3)
-        scale = span_now / grab.start_palm_span
-        new_depth = grab.start_win_depth + WINDOW_FOCAL * (1.0 / scale - 1.0)
-        new_depth = _clamp(new_depth, -0.8, 2.5)
-        new_roll = grab.start_win_roll + (f.palm_roll - grab.start_palm_roll)
-        new_pitch = grab.start_win_pitch + (f.palm_pitch - grab.start_palm_pitch)
-        new_yaw = grab.start_win_yaw + (f.palm_yaw - grab.start_palm_yaw)
-        self.manager.set_pose(
-            grab.window_id,
-            depth=new_depth,
-            roll=new_roll,
-            pitch=new_pitch,
-            yaw=new_yaw,
-        )
-        self._grab = replace(grab, last_palm_x=f.x, last_palm_y=f.y)
+        self._grab = replace(grab, last_palm_x=state.features.x, last_palm_y=state.features.y)
 
     def grabbed_window_id(self) -> int | None:
         return self._grab.window_id if self._grab is not None else None
