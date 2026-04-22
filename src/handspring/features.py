@@ -79,6 +79,9 @@ def hand_features(landmarks: NDArray[np.floating[Any]]) -> HandFeatures:
     index_x = float(np.clip(landmarks[INDEX_TIP][0], 0.0, 1.0))
     index_y = float(np.clip(landmarks[INDEX_TIP][1], 0.0, 1.0))
 
+    thumb_x = float(np.clip(landmarks[THUMB_TIP][0], 0.0, 1.0))
+    thumb_y = float(np.clip(landmarks[THUMB_TIP][1], 0.0, 1.0))
+
     return HandFeatures(
         x=x,
         y=y,
@@ -87,6 +90,8 @@ def hand_features(landmarks: NDArray[np.floating[Any]]) -> HandFeatures:
         pinch=pinch,
         index_x=index_x,
         index_y=index_y,
+        thumb_x=thumb_x,
+        thumb_y=thumb_y,
     )
 
 
@@ -138,14 +143,14 @@ def face_features(landmarks: NDArray[np.floating[Any]]) -> FaceFeatures:
 
 from handspring.types import HandState  # noqa: E402
 
+# Raw distance threshold (frame-normalized). Matches the viz threshold in
+# preview.py so "green pinch line" <=> is_pinching == True.
+_IS_PINCHING_DISTANCE = 0.05
+
 
 def is_pinching(state: HandState) -> bool:
-    """A hand is "actively pinching" when it's present, not in a fist, and
-    the pinch feature crosses 0.85. Fist gets excluded because thumb tip +
-    index tip are geometrically close in a natural fist — that's not a pinch.
-    """
     if not state.present or state.features is None:
         return False
-    if state.gesture == "fist":
-        return False
-    return state.features.pinch >= 0.85
+    dx = state.features.thumb_x - state.features.index_x
+    dy = state.features.thumb_y - state.features.index_y
+    return bool((dx * dx + dy * dy) ** 0.5 < _IS_PINCHING_DISTANCE)

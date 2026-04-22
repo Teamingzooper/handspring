@@ -92,36 +92,68 @@ def test_hand_features_index_tip_extracted():
 # ---------------------------------------------------------------------------
 
 
-def _hand(gesture: str, pinch: float) -> HandState:
-    return HandState(
+def test_is_pinching_uses_raw_distance_not_pinch_feature():
+    # Hand with thumb and index far apart but span-normalized pinch at 0.95
+    # is NOT pinching under the new raw-distance rule.
+    h = HandState(
         present=True,
         features=HandFeatures(
             x=0.5,
             y=0.5,
             z=0.0,
             openness=0.9,
-            pinch=pinch,
+            pinch=0.95,
             index_x=0.5,
             index_y=0.5,
+            thumb_x=0.6,
+            thumb_y=0.5,  # 0.1 away from index — too far
         ),
-        gesture=gesture,  # type: ignore[arg-type]
+        gesture="open",
         motion=MotionState(False, False, 0.0, 0.0, None),
     )
+    assert is_pinching(h) is False
 
 
-def test_is_pinching_true_when_pinch_high_and_open():
-    h = _hand("open", pinch=0.9)
+def test_is_pinching_true_when_thumb_and_index_close():
+    h = HandState(
+        present=True,
+        features=HandFeatures(
+            x=0.5,
+            y=0.5,
+            z=0.0,
+            openness=0.9,
+            pinch=0.0,
+            index_x=0.5,
+            index_y=0.5,
+            thumb_x=0.51,
+            thumb_y=0.51,  # 0.014 away — well within 0.05
+        ),
+        gesture="open",
+        motion=MotionState(False, False, 0.0, 0.0, None),
+    )
     assert is_pinching(h) is True
 
 
-def test_is_pinching_false_for_fist_even_with_high_pinch_value():
-    h = _hand("fist", pinch=0.95)
-    assert is_pinching(h) is False
-
-
-def test_is_pinching_false_when_pinch_low():
-    h = _hand("open", pinch=0.5)
-    assert is_pinching(h) is False
+def test_is_pinching_works_even_if_gesture_is_fist():
+    # Pinch with other fingers curled — classifier may say "fist" but it's
+    # still a pinch geometrically.
+    h = HandState(
+        present=True,
+        features=HandFeatures(
+            x=0.5,
+            y=0.5,
+            z=0.0,
+            openness=0.1,
+            pinch=0.0,
+            index_x=0.5,
+            index_y=0.5,
+            thumb_x=0.505,
+            thumb_y=0.505,  # extremely close
+        ),
+        gesture="fist",
+        motion=MotionState(False, False, 0.0, 0.0, None),
+    )
+    assert is_pinching(h) is True  # No fist exclusion — raw distance rules.
 
 
 def test_is_pinching_false_when_hand_absent():

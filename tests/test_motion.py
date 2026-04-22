@@ -10,7 +10,9 @@ from handspring.types import HandFeatures
 
 
 def _hf(x: float = 0.5, y: float = 0.3, pinch: float = 0.0) -> HandFeatures:
-    return HandFeatures(x=x, y=y, z=0.0, openness=1.0, pinch=pinch, index_x=x, index_y=y)
+    return HandFeatures(
+        x=x, y=y, z=0.0, openness=1.0, pinch=pinch, index_x=x, index_y=y, thumb_x=x, thumb_y=y
+    )
 
 
 def _fill(history: HandHistory, samples: list[tuple[float, HandFeatures]]) -> None:
@@ -140,18 +142,6 @@ def test_drag_dx_dy_relative_to_start():
     last = d.update(h, now=20 * 0.033)
     assert last.dragging is True
     assert last.drag_dx > 0.2  # moved meaningfully right after drag_start
-
-
-def test_pinch_event_suppressed_when_gesture_is_fist():
-    h = HandHistory(capacity=30)
-    d = MotionDetector()
-    h.push(_hf(pinch=0.0), 0.0)
-    d.update(h, now=0.0, gesture="open")
-    # Rising edge — but gesture is "fist" now.
-    h.push(_hf(pinch=0.95), 0.033)
-    u = d.update(h, now=0.033, gesture="fist")
-    assert u.event is None
-    assert u.pinching is False
 
 
 def test_clap_detector_fires_once_on_impact():

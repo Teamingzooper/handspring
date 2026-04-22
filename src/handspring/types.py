@@ -37,6 +37,8 @@ class HandFeatures:
     pinch: float
     index_x: float
     index_y: float
+    thumb_x: float
+    thumb_y: float
 
 
 @dataclass(frozen=True)

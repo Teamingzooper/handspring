@@ -35,7 +35,17 @@ def _frame(
     right_present: bool = True,
     face_present: bool = True,
 ) -> FrameResult:
-    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0, index_x=0.5, index_y=0.5)
+    hf = HandFeatures(
+        x=0.5,
+        y=0.5,
+        z=0.0,
+        openness=0.5,
+        pinch=0.0,
+        index_x=0.5,
+        index_y=0.5,
+        thumb_x=0.5,
+        thumb_y=0.5,
+    )
     _m = MotionState(False, False, 0.0, 0.0, None)
     left = HandState(
         present=left_present,
@@ -132,7 +142,17 @@ def _pose(joints: dict[Joint, PoseLandmark] | None) -> PoseState:
 
 
 def _frame_with_pose(pose: PoseState) -> FrameResult:
-    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0, index_x=0.5, index_y=0.5)
+    hf = HandFeatures(
+        x=0.5,
+        y=0.5,
+        z=0.0,
+        openness=0.5,
+        pinch=0.0,
+        index_x=0.5,
+        index_y=0.5,
+        thumb_x=0.5,
+        thumb_y=0.5,
+    )
     _m = MotionState(False, False, 0.0, 0.0, None)
     left = HandState(present=True, features=hf, gesture="none", motion=_m)
     right = HandState(present=True, features=hf, gesture="none", motion=_m)
@@ -203,7 +223,17 @@ def test_pose_joint_invisible_suppresses_xyz():
 def test_motion_continuous_state_emitted():
     fake = FakeOsc(sent=[])
     emitter = OscEmitter(client=fake)
-    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0, index_x=0.5, index_y=0.5)
+    hf = HandFeatures(
+        x=0.5,
+        y=0.5,
+        z=0.0,
+        openness=0.5,
+        pinch=0.0,
+        index_x=0.5,
+        index_y=0.5,
+        thumb_x=0.5,
+        thumb_y=0.5,
+    )
     m = MotionState(pinching=True, dragging=False, drag_dx=0.0, drag_dy=0.0, event=None)
     left = HandState(present=True, features=hf, gesture="none", motion=m)
     right = HandState(
@@ -230,7 +260,17 @@ def test_motion_continuous_state_emitted():
 def test_motion_event_fires():
     fake = FakeOsc(sent=[])
     emitter = OscEmitter(client=fake)
-    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0, index_x=0.5, index_y=0.5)
+    hf = HandFeatures(
+        x=0.5,
+        y=0.5,
+        z=0.0,
+        openness=0.5,
+        pinch=0.0,
+        index_x=0.5,
+        index_y=0.5,
+        thumb_x=0.5,
+        thumb_y=0.5,
+    )
     m = MotionState(pinching=True, dragging=False, drag_dx=0.0, drag_dy=0.0, event="pinch")
     left = HandState(present=True, features=hf, gesture="none", motion=m)
     right = HandState(
@@ -254,7 +294,17 @@ def test_motion_event_fires():
 def test_drag_dxdy_only_when_dragging():
     fake = FakeOsc(sent=[])
     emitter = OscEmitter(client=fake)
-    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0, index_x=0.5, index_y=0.5)
+    hf = HandFeatures(
+        x=0.5,
+        y=0.5,
+        z=0.0,
+        openness=0.5,
+        pinch=0.0,
+        index_x=0.5,
+        index_y=0.5,
+        thumb_x=0.5,
+        thumb_y=0.5,
+    )
     m = MotionState(pinching=True, dragging=True, drag_dx=0.25, drag_dy=-0.1, event=None)
     left = HandState(present=True, features=hf, gesture="none", motion=m)
     right = HandState(
@@ -278,7 +328,17 @@ def test_drag_dxdy_only_when_dragging():
 def test_clap_event_emits():
     fake = FakeOsc(sent=[])
     emitter = OscEmitter(client=fake)
-    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0, index_x=0.5, index_y=0.5)
+    hf = HandFeatures(
+        x=0.5,
+        y=0.5,
+        z=0.0,
+        openness=0.5,
+        pinch=0.0,
+        index_x=0.5,
+        index_y=0.5,
+        thumb_x=0.5,
+        thumb_y=0.5,
+    )
     m = MotionState(False, False, 0.0, 0.0, None)
     left = HandState(present=True, features=hf, gesture="none", motion=m)
     right = HandState(present=True, features=hf, gesture="none", motion=m)
@@ -406,6 +466,17 @@ def test_index_tip_emitted():
     assert "/hand/left/index_y" in addresses
     assert "/hand/right/index_x" in addresses
     assert "/hand/right/index_y" in addresses
+
+
+def test_thumb_tip_emitted():
+    fake = FakeOsc(sent=[])
+    emitter = OscEmitter(client=fake)
+    emitter.emit(_frame())
+    addresses = [addr for addr, _ in fake.sent]
+    assert "/hand/left/thumb_x" in addresses
+    assert "/hand/left/thumb_y" in addresses
+    assert "/hand/right/thumb_x" in addresses
+    assert "/hand/right/thumb_y" in addresses
 
 
 def test_app_mode_change_emitted():

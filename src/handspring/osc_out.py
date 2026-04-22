@@ -66,6 +66,8 @@ class OscEmitter:
             self._client.send_message(f"/hand/{side}/pinch", float(f.pinch))
             self._client.send_message(f"/hand/{side}/index_x", float(f.index_x))
             self._client.send_message(f"/hand/{side}/index_y", float(f.index_y))
+            self._client.send_message(f"/hand/{side}/thumb_x", float(f.thumb_x))
+            self._client.send_message(f"/hand/{side}/thumb_y", float(f.thumb_y))
 
         # Motion continuous state (always emitted).
         m = state.motion

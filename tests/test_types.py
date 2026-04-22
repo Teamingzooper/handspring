@@ -13,7 +13,17 @@ from handspring.types import (
 
 
 def test_hand_features_frozen():
-    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.8, pinch=0.1, index_x=0.5, index_y=0.5)
+    hf = HandFeatures(
+        x=0.5,
+        y=0.5,
+        z=0.0,
+        openness=0.8,
+        pinch=0.1,
+        index_x=0.5,
+        index_y=0.5,
+        thumb_x=0.5,
+        thumb_y=0.5,
+    )
     import pytest
 
     with pytest.raises(AttributeError):
@@ -29,7 +39,17 @@ def test_hand_state_absent():
 
 
 def test_hand_state_present():
-    hf = HandFeatures(x=0.1, y=0.2, z=0.3, openness=0.9, pinch=0.05, index_x=0.1, index_y=0.2)
+    hf = HandFeatures(
+        x=0.1,
+        y=0.2,
+        z=0.3,
+        openness=0.9,
+        pinch=0.05,
+        index_x=0.1,
+        index_y=0.2,
+        thumb_x=0.1,
+        thumb_y=0.2,
+    )
     m = MotionState(pinching=False, dragging=False, drag_dx=0.0, drag_dy=0.0, event=None)
     hs = HandState(present=True, features=hf, gesture="open", motion=m)
     assert hs.present is True
@@ -112,7 +132,17 @@ def test_motion_state_with_event():
 
 def test_hand_state_has_motion():
     m = MotionState(pinching=False, dragging=False, drag_dx=0.0, drag_dy=0.0, event=None)
-    hf = HandFeatures(x=0.5, y=0.5, z=0.0, openness=0.5, pinch=0.0, index_x=0.5, index_y=0.5)
+    hf = HandFeatures(
+        x=0.5,
+        y=0.5,
+        z=0.0,
+        openness=0.5,
+        pinch=0.0,
+        index_x=0.5,
+        index_y=0.5,
+        thumb_x=0.5,
+        thumb_y=0.5,
+    )
     hs = HandState(present=True, features=hf, gesture="open", motion=m)
     assert hs.motion.pinching is False
 

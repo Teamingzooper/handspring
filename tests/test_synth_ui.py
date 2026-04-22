@@ -19,7 +19,9 @@ def _absent_hand() -> HandState:
 def _hand(gesture: str, x: float = 0.5, y: float = 0.5) -> HandState:
     return HandState(
         present=True,
-        features=HandFeatures(x=x, y=y, z=0.0, openness=1.0, pinch=0.0, index_x=x, index_y=y),
+        features=HandFeatures(
+            x=x, y=y, z=0.0, openness=1.0, pinch=0.0, index_x=x, index_y=y, thumb_x=x, thumb_y=y
+        ),
         gesture=gesture,  # type: ignore[arg-type]
         motion=MotionState(False, False, 0.0, 0.0, None),
     )

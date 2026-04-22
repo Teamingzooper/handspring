@@ -91,7 +91,23 @@ def test_cycle_color():
 
 
 def _hf(x: float, y: float, pinch: float = 0.0) -> HandFeatures:
-    return HandFeatures(x=x, y=y, z=0.0, openness=1.0, pinch=pinch, index_x=x, index_y=y)
+    # When pinch >= 0.85 we place thumb very close to index (distance ~0.01 < 0.05).
+    # When pinch < 0.5 we place thumb 0.1 away so is_pinching() returns False.
+    if pinch >= 0.85:
+        thumb_x, thumb_y = x + 0.005, y + 0.005
+    else:
+        thumb_x, thumb_y = x + 0.1, y
+    return HandFeatures(
+        x=x,
+        y=y,
+        z=0.0,
+        openness=1.0,
+        pinch=pinch,
+        index_x=x,
+        index_y=y,
+        thumb_x=thumb_x,
+        thumb_y=thumb_y,
+    )
 
 
 def _hand(gesture: str, x: float, y: float, pinch: float = 0.0) -> HandState:

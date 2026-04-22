@@ -61,18 +61,16 @@ class MotionDetector:
         self._arming_drag_since: float | None = None
         self._idle_since: float | None = None
 
-    def update(self, history: HandHistory, now: float, gesture: str = "none") -> MotionUpdate:
+    def update(self, history: HandHistory, now: float) -> MotionUpdate:
         latest = history.latest()
         if latest is None:
             self._was_pinching = False
             self._reset_drag()
             return MotionUpdate(False, False, 0.0, 0.0, None)
 
-        raw_pinching = latest.features.pinch >= _PINCH_ON or (
+        pinching = latest.features.pinch >= _PINCH_ON or (
             self._was_pinching and latest.features.pinch > _PINCH_OFF
         )
-        # Fist is never a pinch, even if the geometric distance is small.
-        pinching = raw_pinching and gesture != "fist"
         event: MotionEvent | None = None
 
         # --- Pinch rising edge ---
