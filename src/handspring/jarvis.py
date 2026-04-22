@@ -116,6 +116,8 @@ _TAP_COOLDOWN_SECONDS = 0.4
 _MIN_WINDOW_DIAGONAL = 0.1
 _PINCH_ON_THRESHOLD = 0.85
 _CREATE_ENTRY_DISTANCE = 0.08
+_RESIZE_CORNER_RADIUS = 0.04
+_MIN_RESIZE_SIZE = 0.05
 
 
 @dataclass
@@ -134,11 +136,21 @@ class _CreateState:
     current_right: tuple[float, float]
 
 
+@dataclass
+class _ResizeState:
+    window_id: int
+    side: Side
+    # Bottom-left corner of the window at the moment resize started — kept fixed.
+    anchor_x: float
+    anchor_bottom_y: float  # y + height (image coords; larger y = lower on screen)
+
+
 class JarvisController:
     def __init__(self) -> None:
         self.manager = WindowManager()
         self._grab: _GrabState | None = None
         self._create: _CreateState | None = None
+        self._resize: _ResizeState | None = None
         self._hover_frames: dict[Side, int] = {"left": 0, "right": 0}
         self._last_hover_window: dict[Side, int | None] = {"left": None, "right": None}
         self._tap_cooldown_by_window: dict[int, float] = {}
@@ -173,9 +185,80 @@ class JarvisController:
         if self._tap_set_at_frame != self._frame_count - 1:
             self._last_tap_id = None
 
+        if self._handle_resize(frame, now):
+            return  # resize takes the frame
+
         self._handle_create(frame, now)
         self._handle_grab(frame, now)
         self._handle_tap(frame, now)
+
+    def _handle_resize(self, frame: FrameResult, _now: float) -> bool:
+        # Continuing resize?
+        if self._resize is not None:
+            side_state = getattr(frame, self._resize.side)
+            if not is_pinching(side_state) or side_state.features is None:
+                # Released — commit is already live (we've been updating every frame).
+                self._resize = None
+                return False
+            f = side_state.features
+            # New top-right corner = pinch's index tip.
+            new_right = f.index_x
+            new_top = f.index_y
+            # Enforce minimum size.
+            min_right = self._resize.anchor_x + _MIN_RESIZE_SIZE
+            max_top = self._resize.anchor_bottom_y - _MIN_RESIZE_SIZE
+            if new_right < min_right:
+                new_right = min_right
+            if new_top > max_top:
+                new_top = max_top
+            # Compute new window geometry (clamp to minimum after applying corner clamps).
+            new_width = max(new_right - self._resize.anchor_x, _MIN_RESIZE_SIZE)
+            new_height = max(self._resize.anchor_bottom_y - new_top, _MIN_RESIZE_SIZE)
+            w = self.manager.get(self._resize.window_id)
+            if w is not None:
+                # Direct replacement (can't use move — that's translation-only).
+                self.manager._replace(
+                    replace(
+                        w, x=self._resize.anchor_x, y=new_top, width=new_width, height=new_height
+                    )
+                )
+            return True
+
+        # Not resizing — check for entry trigger. Skip entirely if creating.
+        if self._create is not None:
+            return False
+
+        for side in ("left", "right"):
+            state = getattr(frame, side)
+            if not is_pinching(state) or state.features is None:
+                continue
+            fx = state.features.index_x
+            fy = state.features.index_y
+            # Check topmost window whose top-right corner is within radius.
+            best: tuple[int, float] | None = None  # (z, window_id)
+            target_window = None
+            for w in self.manager.windows():
+                corner_x = w.x + w.width
+                corner_y = w.y
+                dx = fx - corner_x
+                dy = fy - corner_y
+                if dx * dx + dy * dy < _RESIZE_CORNER_RADIUS**2 and (best is None or w.z > best[0]):
+                    best = (w.z, w.id)
+                    target_window = w
+            if target_window is not None:
+                self.manager.promote(target_window.id)
+                self._resize = _ResizeState(
+                    window_id=target_window.id,
+                    side=side,  # type: ignore[arg-type]
+                    anchor_x=target_window.x,
+                    anchor_bottom_y=target_window.y + target_window.height,
+                )
+                return True
+
+        return False
+
+    def resizing_window_id(self) -> int | None:
+        return self._resize.window_id if self._resize is not None else None
 
     # ---- 1. Create: both-hand pinch + pull apart ----
 

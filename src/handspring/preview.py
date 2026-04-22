@@ -264,6 +264,28 @@ def _draw_jarvis(frame: NDArray[np.uint8], jarvis: JarvisController, *, mirrored
             1,
             cv2.LINE_AA,
         )
+        # Top-right corner resize handle.
+        resizing_id = jarvis.resizing_window_id()
+        handle_color = (
+            (136, 255, 0) if resizing_id == win.id else (100, 200, 255)
+        )  # green when active, cyan otherwise
+        handle_size = 10 if resizing_id == win.id else 8
+        hx = x1
+        hy = y0
+        cv2.rectangle(
+            frame,
+            (hx - handle_size, hy),
+            (hx, hy + handle_size),
+            handle_color,
+            -1,
+        )
+        cv2.rectangle(
+            frame,
+            (hx - handle_size, hy),
+            (hx, hy + handle_size),
+            (30, 30, 30),
+            1,
+        )
 
     pending = jarvis.pending_rect()
     if pending is not None:

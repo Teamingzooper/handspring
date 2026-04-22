@@ -327,3 +327,216 @@ def test_pending_rect_clears_after_release():
     assert c.pending_rect() is None
     # And a window was committed.
     assert len(c.manager.windows()) == 1
+
+
+def test_resize_enters_when_pinch_near_top_right_corner():
+    c = JarvisController()
+    w = c.manager.create(x=0.2, y=0.2, width=0.4, height=0.3)
+    # top-right corner at (0.6, 0.2)
+    # Pinch with right hand at (0.6, 0.2), thumb close to index.
+    frame = _frame(
+        _absent(),
+        HandState(
+            present=True,
+            features=HandFeatures(
+                x=0.6,
+                y=0.2,
+                z=0.0,
+                openness=0.9,
+                pinch=0.0,
+                index_x=0.6,
+                index_y=0.2,
+                thumb_x=0.605,
+                thumb_y=0.205,
+            ),
+            gesture="open",
+            motion=MotionState(False, False, 0.0, 0.0, None),
+        ),
+    )
+    c.update(frame)
+    assert c.resizing_window_id() == w.id
+
+
+def test_resize_updates_window_size():
+    c = JarvisController()
+    w = c.manager.create(x=0.2, y=0.2, width=0.4, height=0.3)
+    # Enter resize at (0.6, 0.2)
+    enter = _frame(
+        _absent(),
+        HandState(
+            present=True,
+            features=HandFeatures(
+                x=0.6,
+                y=0.2,
+                z=0.0,
+                openness=0.9,
+                pinch=0.0,
+                index_x=0.6,
+                index_y=0.2,
+                thumb_x=0.605,
+                thumb_y=0.205,
+            ),
+            gesture="open",
+            motion=MotionState(False, False, 0.0, 0.0, None),
+        ),
+    )
+    c.update(enter)
+    # Move pinch to (0.8, 0.1) — larger window.
+    move = _frame(
+        _absent(),
+        HandState(
+            present=True,
+            features=HandFeatures(
+                x=0.8,
+                y=0.1,
+                z=0.0,
+                openness=0.9,
+                pinch=0.0,
+                index_x=0.8,
+                index_y=0.1,
+                thumb_x=0.805,
+                thumb_y=0.105,
+            ),
+            gesture="open",
+            motion=MotionState(False, False, 0.0, 0.0, None),
+        ),
+    )
+    c.update(move)
+    resized = c.manager.get(w.id)
+    assert resized is not None
+    # Bottom-left fixed at (0.2, 0.5): width = 0.8 - 0.2 = 0.6, height = 0.5 - 0.1 = 0.4
+    assert abs(resized.x - 0.2) < 1e-6
+    assert abs(resized.y - 0.1) < 1e-6
+    assert abs(resized.width - 0.6) < 1e-6
+    assert abs(resized.height - 0.4) < 1e-6
+
+
+def test_resize_ends_on_release():
+    c = JarvisController()
+    w = c.manager.create(x=0.2, y=0.2, width=0.4, height=0.3)
+    c.update(
+        _frame(
+            _absent(),
+            HandState(
+                present=True,
+                features=HandFeatures(
+                    x=0.6,
+                    y=0.2,
+                    z=0.0,
+                    openness=0.9,
+                    pinch=0.0,
+                    index_x=0.6,
+                    index_y=0.2,
+                    thumb_x=0.605,
+                    thumb_y=0.205,
+                ),
+                gesture="open",
+                motion=MotionState(False, False, 0.0, 0.0, None),
+            ),
+        )
+    )
+    assert c.resizing_window_id() == w.id
+    # Release pinch (thumb far from index).
+    c.update(
+        _frame(
+            _absent(),
+            HandState(
+                present=True,
+                features=HandFeatures(
+                    x=0.6,
+                    y=0.2,
+                    z=0.0,
+                    openness=0.9,
+                    pinch=0.0,
+                    index_x=0.6,
+                    index_y=0.2,
+                    thumb_x=0.8,
+                    thumb_y=0.2,
+                ),
+                gesture="open",
+                motion=MotionState(False, False, 0.0, 0.0, None),
+            ),
+        )
+    )
+    assert c.resizing_window_id() is None
+
+
+def test_resize_not_triggered_far_from_corner():
+    c = JarvisController()
+    c.manager.create(x=0.2, y=0.2, width=0.4, height=0.3)
+    # Pinch at (0.1, 0.9) — far from any corner.
+    c.update(
+        _frame(
+            _absent(),
+            HandState(
+                present=True,
+                features=HandFeatures(
+                    x=0.1,
+                    y=0.9,
+                    z=0.0,
+                    openness=0.9,
+                    pinch=0.0,
+                    index_x=0.1,
+                    index_y=0.9,
+                    thumb_x=0.105,
+                    thumb_y=0.905,
+                ),
+                gesture="open",
+                motion=MotionState(False, False, 0.0, 0.0, None),
+            ),
+        )
+    )
+    assert c.resizing_window_id() is None
+
+
+def test_resize_enforces_minimum_size():
+    c = JarvisController()
+    w = c.manager.create(x=0.2, y=0.2, width=0.4, height=0.3)
+    c.update(
+        _frame(
+            _absent(),
+            HandState(
+                present=True,
+                features=HandFeatures(
+                    x=0.6,
+                    y=0.2,
+                    z=0.0,
+                    openness=0.9,
+                    pinch=0.0,
+                    index_x=0.6,
+                    index_y=0.2,
+                    thumb_x=0.605,
+                    thumb_y=0.205,
+                ),
+                gesture="open",
+                motion=MotionState(False, False, 0.0, 0.0, None),
+            ),
+        )
+    )
+    # Try to shrink below minimum: pinch at (0.21, 0.49), which would produce
+    # width=0.01 and height=0.01 — below the 0.05 floor.
+    c.update(
+        _frame(
+            _absent(),
+            HandState(
+                present=True,
+                features=HandFeatures(
+                    x=0.21,
+                    y=0.49,
+                    z=0.0,
+                    openness=0.9,
+                    pinch=0.0,
+                    index_x=0.21,
+                    index_y=0.49,
+                    thumb_x=0.215,
+                    thumb_y=0.495,
+                ),
+                gesture="open",
+                motion=MotionState(False, False, 0.0, 0.0, None),
+            ),
+        )
+    )
+    resized = c.manager.get(w.id)
+    assert resized is not None
+    assert resized.width >= 0.05
+    assert resized.height >= 0.05
