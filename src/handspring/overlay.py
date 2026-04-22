@@ -34,7 +34,9 @@ def available() -> bool:
 _state: dict[str, Any] = {
     "cursor": None,  # (screen_x, screen_y) or None
     "radial": None,  # (origin_screen_xy, selected_idx, progress, apps) or None
-    "selected_app": "Finder",  # badge label
+    "selected_app": "Finder",  # small label under the dot
+    "pending_rect": None,  # (x1, y1, x2, y2) while pinching to create
+    "committed_rect": None,  # (x1, y1, x2, y2) after release, until window appears
 }
 
 
@@ -43,10 +45,14 @@ def set_state(
     cursor: tuple[int, int] | None,
     radial: tuple[tuple[int, int], int | None, float, tuple[str, ...]] | None,
     selected_app: str,
+    pending_rect: tuple[int, int, int, int] | None = None,
+    committed_rect: tuple[int, int, int, int] | None = None,
 ) -> None:
     _state["cursor"] = cursor
     _state["radial"] = radial
     _state["selected_app"] = selected_app
+    _state["pending_rect"] = pending_rect
+    _state["committed_rect"] = committed_rect
 
 
 if _AVAILABLE:
@@ -58,24 +64,46 @@ if _AVAILABLE:
 
         def drawRect_(self, _rect: Any) -> None:  # noqa: N802
             ctx = AppKit.NSGraphicsContext.currentContext().CGContext()
-            # Clear — NSWindow is already transparent, but defensively paint
-            # nothing. (CGContextClearRect could be used but isn't needed.)
             cursor = _state["cursor"]
             radial = _state["radial"]
             selected_app = _state["selected_app"]
+            pending_rect = _state["pending_rect"]
+            committed_rect = _state["committed_rect"]
 
-            # Left-hand cursor: big green dot with white outline.
+            # Post-commit ghost rect (lighter grey, underneath) — shown until
+            # the real macOS window appears.
+            if committed_rect is not None:
+                x1, y1, x2, y2 = committed_rect
+                rect = Quartz.CGRectMake(x1, y1, x2 - x1, y2 - y1)
+                Quartz.CGContextSetRGBFillColor(ctx, 0.85, 0.85, 0.85, 0.14)
+                Quartz.CGContextFillRect(ctx, rect)
+                Quartz.CGContextSetRGBStrokeColor(ctx, 0.85, 0.85, 0.85, 0.55)
+                Quartz.CGContextSetLineWidth(ctx, 1.5)
+                Quartz.CGContextStrokeRect(ctx, rect)
+
+            # Pending create rect (darker grey, while pinching both hands).
+            if pending_rect is not None:
+                x1, y1, x2, y2 = pending_rect
+                rect = Quartz.CGRectMake(x1, y1, x2 - x1, y2 - y1)
+                Quartz.CGContextSetRGBFillColor(ctx, 0.70, 0.70, 0.70, 0.22)
+                Quartz.CGContextFillRect(ctx, rect)
+                Quartz.CGContextSetRGBStrokeColor(ctx, 0.70, 0.70, 0.70, 0.85)
+                Quartz.CGContextSetLineWidth(ctx, 2.0)
+                Quartz.CGContextStrokeRect(ctx, rect)
+
+            # Left-hand cursor: plain grey circle.
             if cursor is not None:
                 cx, cy = cursor
-                # Outer soft glow
-                Quartz.CGContextSetRGBFillColor(ctx, 0.53, 1.0, 0.0, 0.25)
-                Quartz.CGContextFillEllipseInRect(ctx, Quartz.CGRectMake(cx - 22, cy - 22, 44, 44))
-                # Core dot
-                Quartz.CGContextSetRGBFillColor(ctx, 0.53, 1.0, 0.0, 0.95)
+                Quartz.CGContextSetRGBFillColor(ctx, 0.70, 0.70, 0.70, 0.75)
                 Quartz.CGContextFillEllipseInRect(ctx, Quartz.CGRectMake(cx - 10, cy - 10, 20, 20))
-                # White center
-                Quartz.CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0)
-                Quartz.CGContextFillEllipseInRect(ctx, Quartz.CGRectMake(cx - 3, cy - 3, 6, 6))
+                # Selected-app label right under the dot.
+                _draw_label(
+                    selected_app,
+                    cx,
+                    cy + 24,
+                    AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.80, 0.80, 0.80, 0.95),
+                    False,
+                )
 
             # Radial menu (in screen coords).
             if radial is not None:
@@ -139,17 +167,6 @@ if _AVAILABLE:
                         ctx, ox, oy, r_inner + 8, -math.pi / 2, end_radians, False
                     )
                     Quartz.CGContextStrokePath(ctx)
-
-            # Selected-app badge (top-center).
-            screen = AppKit.NSScreen.mainScreen()
-            sw = screen.frame().size.width
-            _draw_label(
-                f"APP: {selected_app}",
-                sw / 2,
-                28,
-                AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.53, 1.0, 0.0, 1.0),
-                True,
-            )
 
     def _draw_label(text: str, cx: float, cy: float, color: Any, bold: bool) -> None:
         attrs = {

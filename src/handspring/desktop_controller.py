@@ -99,6 +99,10 @@ class DesktopController:
         self._selected_app: str = _RADIAL_APPS[0]
         # Exposed for the native overlay: left-hand midpoint in screen pixels.
         self._left_cursor_screen: tuple[int, int] | None = None
+        # After a window-spawn fires, hold the ghost rect until either a
+        # timeout elapses or the main loop clears it (caller's choice).
+        self._post_spawn: tuple[tuple[int, int, int, int], float] | None = None
+        self._post_spawn_hold_seconds = 2.0
 
     def selected_app(self) -> str:
         return self._selected_app
@@ -106,6 +110,29 @@ class DesktopController:
     def left_cursor_screen(self) -> tuple[int, int] | None:
         """Screen pixel coords for the left hand (for the native overlay)."""
         return self._left_cursor_screen
+
+    def pending_create_screen_bounds(self) -> tuple[int, int, int, int] | None:
+        """Live screen-pixel (x1, y1, x2, y2) of the create gesture while pinching."""
+        rect = self.pending_create_bounds()
+        if rect is None:
+            return None
+        x, y, w, h = rect
+        return (
+            int(x * self._screen_w),
+            int(y * self._screen_h),
+            int((x + w) * self._screen_w),
+            int((y + h) * self._screen_h),
+        )
+
+    def post_spawn_screen_bounds(self) -> tuple[int, int, int, int] | None:
+        """Ghost rect from the last spawn, valid until its hold window expires."""
+        if self._post_spawn is None:
+            return None
+        bounds, expire = self._post_spawn
+        if self._last_now >= expire:
+            self._post_spawn = None
+            return None
+        return bounds
 
     def enabled(self) -> bool:
         return not self._disabled
@@ -407,6 +434,11 @@ class DesktopController:
                         by2 = by1 + 150
                     os_control.new_app_window(self._selected_app, bounds=(bx1, by1, bx2, by2))
                     self._events_out.append(f"new_window:{self._selected_app}")
+                    # Ghost rect stays visible until its hold expires.
+                    self._post_spawn = (
+                        (bx1, by1, bx2, by2),
+                        self._last_now + self._post_spawn_hold_seconds,
+                    )
                 self._create.armed = False
             return
         assert left.features is not None and right.features is not None

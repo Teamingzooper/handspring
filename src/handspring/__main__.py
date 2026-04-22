@@ -182,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
                     cursor=desktop.left_cursor_screen(),
                     radial=radial_payload,
                     selected_app=desktop.selected_app(),
+                    pending_rect=desktop.pending_create_screen_bounds(),
+                    committed_rect=desktop.post_spawn_screen_bounds(),
                 )
                 overlay_inst.redraw()
                 overlay_inst.pump()
