@@ -209,18 +209,101 @@ def screenshot(mode: str = "screen") -> str | None:
     return path
 
 
-def close_frontmost_window() -> None:
-    """Close the frontmost window of the active application (Cmd+W)."""
+def _run_script(script: str, timeout: float = 2.0) -> None:
     if not _MAC:
         return
     with contextlib.suppress(subprocess.TimeoutExpired, FileNotFoundError):
         subprocess.run(
-            [
-                "osascript",
-                "-e",
-                'tell application "System Events" to keystroke "w" using {command down}',
-            ],
+            ["osascript", "-e", script],
             check=False,
             capture_output=True,
-            timeout=2.0,
+            timeout=timeout,
         )
+
+
+def _keystroke(key: str, modifiers: list[str]) -> None:
+    mods = ", ".join(modifiers)
+    _run_script(f'tell application "System Events" to keystroke "{key}" using {{{mods}}}')
+
+
+def _key_code(code: int, modifiers: list[str]) -> None:
+    mods = ", ".join(modifiers)
+    suffix = f" using {{{mods}}}" if modifiers else ""
+    _run_script(f'tell application "System Events" to key code {code}{suffix}')
+
+
+def close_frontmost_window() -> None:
+    """Close the frontmost window of the active application (Cmd+W)."""
+    _keystroke("w", ["command down"])
+
+
+def minimize_front_window() -> None:
+    """Minimize the frontmost window (Cmd+M)."""
+    _keystroke("m", ["command down"])
+
+
+def fullscreen_front_window() -> None:
+    """Toggle native macOS fullscreen on the frontmost window (Ctrl+Cmd+F)."""
+    _keystroke("f", ["control down", "command down"])
+
+
+def mission_control() -> None:
+    """Open Mission Control (Ctrl+Up). Shows all windows across the current Space."""
+    _key_code(126, ["control down"])  # 126 = up arrow
+
+
+def switch_desktop(direction: str) -> None:
+    """Page left/right between macOS Spaces (Ctrl+←/→)."""
+    code = 123 if direction == "left" else 124  # 123=left, 124=right
+    _key_code(code, ["control down"])
+
+
+def visible_frame() -> tuple[int, int, int, int]:
+    """Usable area of the main screen in top-origin pixels (menubar + dock excluded).
+
+    Returns ``(x, y, width, height)``. AppleScript / AX windows use this origin.
+    """
+    if not _AVAILABLE:
+        return (0, 25, 1440, 820)
+    screen = NSScreen.mainScreen()
+    full = screen.frame()
+    vis = screen.visibleFrame()
+    x = int(vis.origin.x)
+    # Cocoa origin is bottom-left; AppleScript uses top-left. Flip the y.
+    top = int(full.size.height - (vis.origin.y + vis.size.height))
+    return (x, top, int(vis.size.width), int(vis.size.height))
+
+
+def tile_front_window(position: str) -> None:
+    """Resize + move the frontmost window within the visible screen.
+
+    position: "left" | "right" | "full" | "center"
+    """
+    if not _MAC:
+        return
+    x, y, w, h = visible_frame()
+    if position == "left":
+        px, py, sw, sh = x, y, w // 2, h
+    elif position == "right":
+        px, py, sw, sh = x + w // 2, y, w - w // 2, h
+    elif position == "full":
+        px, py, sw, sh = x, y, w, h
+    elif position == "center":
+        # 70% × 75% of usable, centered.
+        sw = int(w * 0.7)
+        sh = int(h * 0.75)
+        px = x + (w - sw) // 2
+        py = y + (h - sh) // 2
+    else:
+        return
+    _run_script(
+        'tell application "System Events"\n'
+        "    set frontApp to first application process whose frontmost is true\n"
+        "    tell frontApp\n"
+        "        try\n"
+        f"            set position of front window to {{{px}, {py}}}\n"
+        f"            set size of front window to {{{sw}, {sh}}}\n"
+        "        end try\n"
+        "    end tell\n"
+        "end tell"
+    )

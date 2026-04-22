@@ -472,3 +472,46 @@ def test_radial_root_locks_when_hand_enters_sub_ring():
         # We don't assert a specific value here — just that the lock released,
         # i.e., hovered_sub is back to None.
         assert c._radial.hovered_sub is None  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Window / Mission / Desktops commits
+# ---------------------------------------------------------------------------
+
+
+def _find_root(c: DesktopController, name: str) -> int:
+    for i, (n, _) in enumerate(c.root_items()):
+        if n == name:
+            return i
+    raise AssertionError(f"no root item {name}")
+
+
+def test_window_left_commits_tile_left():
+    c = DesktopController(mirrored=False)
+    with patch("handspring.desktop_controller.os_control.tile_front_window") as t:
+        subs = c.root_items()[_find_root(c, "Window")][1]
+        c._commit_radial(_find_root(c, "Window"), subs.index("Left"))  # type: ignore[attr-defined]
+        t.assert_called_once_with("left")
+
+
+def test_window_close_fires_close():
+    c = DesktopController(mirrored=False)
+    with patch("handspring.desktop_controller.os_control.close_frontmost_window") as cw:
+        subs = c.root_items()[_find_root(c, "Window")][1]
+        c._commit_radial(_find_root(c, "Window"), subs.index("Close"))  # type: ignore[attr-defined]
+        cw.assert_called_once()
+
+
+def test_mission_commits_mission_control():
+    c = DesktopController(mirrored=False)
+    with patch("handspring.desktop_controller.os_control.mission_control") as m:
+        c._commit_radial(_find_root(c, "Mission"), None)  # type: ignore[attr-defined]
+        m.assert_called_once()
+
+
+def test_desktops_right_switches_right():
+    c = DesktopController(mirrored=False)
+    with patch("handspring.desktop_controller.os_control.switch_desktop") as s:
+        subs = c.root_items()[_find_root(c, "Desktops")][1]
+        c._commit_radial(_find_root(c, "Desktops"), subs.index("Right"))  # type: ignore[attr-defined]
+        s.assert_called_once_with("right")

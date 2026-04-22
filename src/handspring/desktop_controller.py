@@ -45,11 +45,23 @@ _RADIAL_APPS: tuple[str, ...] = (
     "Music",
 )
 _SCREENSHOT_SUBS: tuple[str, ...] = ("Screen", "Window", "Selection")
+_WINDOW_SUBS: tuple[str, ...] = (
+    "Close",
+    "Minimize",
+    "Fullscreen",
+    "Left",
+    "Right",
+    "Center",
+)
+_DESKTOP_SUBS: tuple[str, ...] = ("Left", "Right")
 # Tuples of (name, subs). Empty subs = leaf action.
 _ROOT_ITEMS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("None", ()),
     ("Create", _RADIAL_APPS),
+    ("Window", _WINDOW_SUBS),
     ("Scroll", ()),
+    ("Mission", ()),
+    ("Desktops", _DESKTOP_SUBS),
     ("Screenshot", _SCREENSHOT_SUBS),
 )
 
@@ -469,6 +481,25 @@ class DesktopController:
             os_control.screenshot(variant)
             self._events_out.append(f"screenshot:{variant}")
             # Screenshot is one-shot — don't change persistent mode.
+        elif name == "Window":
+            # All Window subs are one-shot actions on the frontmost window.
+            sub = subs[sub_idx] if sub_idx is not None else "Center"
+            if sub == "Close":
+                os_control.close_frontmost_window()
+            elif sub == "Minimize":
+                os_control.minimize_front_window()
+            elif sub == "Fullscreen":
+                os_control.fullscreen_front_window()
+            elif sub in ("Left", "Right", "Center"):
+                os_control.tile_front_window(sub.lower())
+            self._events_out.append(f"window:{sub.lower()}")
+        elif name == "Mission":
+            os_control.mission_control()
+            self._events_out.append("mission")
+        elif name == "Desktops":
+            direction = subs[sub_idx].lower() if sub_idx is not None else "right"
+            os_control.switch_desktop(direction)
+            self._events_out.append(f"desktop:{direction}")
 
     # ---- Scroll mode (left hand y → scroll wheel events) ----
 
