@@ -308,3 +308,89 @@ def test_pending_create_bounds_exposes_live_rect():
     assert abs(y - 0.3) < 0.01
     assert abs(w_ - 0.4) < 0.01
     assert abs(h_ - 0.4) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# Left-hand radial app launcher
+# ---------------------------------------------------------------------------
+
+
+def test_radial_launches_app_after_hold_and_pull():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.launch_app") as la,
+    ):
+        # Left hand starts pinching.
+        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.0)
+        # Hold 0.5s at same position — hits 0.4s threshold and activates.
+        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.5)
+        # Move hand UP (smaller y) to select top slice (Finder, idx 0).
+        c.update(_frame(_hand("open", 0.3, 0.3, pinch=0.95), _absent()), now=0.6)
+        # Release pinch → launch selected.
+        c.update(_frame(_hand("open", 0.3, 0.3, pinch=0.1), _absent()), now=0.7)
+        la.assert_called_once()
+        assert la.call_args[0][0] in c.radial_apps()
+
+
+def test_radial_release_at_center_does_not_launch():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.launch_app") as la,
+    ):
+        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.0)
+        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.5)
+        # Stay at center, release.
+        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.1), _absent()), now=0.6)
+        la.assert_not_called()
+
+
+def test_radial_short_pinch_does_not_activate():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.launch_app") as la,
+    ):
+        # Brief pinch < 0.4s then release.
+        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.0)
+        c.update(_frame(_hand("open", 0.3, 0.3, pinch=0.1), _absent()), now=0.2)
+        la.assert_not_called()
+
+
+def test_cursor_inset_reaches_screen_edges():
+    """With inset=0.08, camera x=0.08 should map to screen x=0 (left edge)."""
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor") as mv,
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+    ):
+        # Several frames at camera midpoint=0.08 so smoothing converges.
+        # Thumb and index spread apart so is_pinching() stays False.
+        state = HandState(
+            present=True,
+            features=HandFeatures(
+                x=0.08,
+                y=0.5,
+                z=0,
+                openness=1,
+                pinch=0,
+                index_x=0.04,
+                index_y=0.5,
+                thumb_x=0.12,
+                thumb_y=0.5,
+            ),
+            gesture="open",
+            motion=MotionState(False, False, 0, 0, None),
+        )
+        for i in range(40):
+            c.update(_frame(_absent(), state), now=i * 0.033)
+        sx, _sy = mv.call_args[0]
+        assert sx == 0  # hit the left edge

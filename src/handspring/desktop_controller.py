@@ -23,8 +23,24 @@ _CREATE_ENTRY_DISTANCE = 0.08  # index-tip distance threshold to arm "new window
 _CREATE_MIN_DIAGONAL = 0.15  # hands must pull to this diagonal distance to commit
 _FAILSAFE_HOLD_SECONDS = 5.0  # both-fist hold duration to toggle disabled
 # EMA smoothing factor for the cursor. Higher = more responsive but more jittery.
-# 0.35 gives a roughly 3-frame low-pass (snappy but not jumpy).
 _CURSOR_SMOOTHING = 0.35
+# Camera-to-screen input inset. Camera coords in [INSET, 1 - INSET] map to
+# screen coords [0, 1]; anything beyond clamps to the screen edge. This means
+# the user doesn't need to stretch to the extreme camera frame edges to reach
+# the dock or menubar — the "comfortable middle" covers the whole screen.
+_CURSOR_INSET = 0.08
+
+# Radial app launcher (left hand).
+_RADIAL_HOLD_SECONDS = 0.4  # pinch must be held this long to open the wheel
+_RADIAL_SELECT_RADIUS = 0.05  # hand must move this far from origin to commit a slice
+_RADIAL_APPS: tuple[str, ...] = (
+    "Finder",
+    "Safari",
+    "Messages",
+    "Notes",
+    "Terminal",
+    "Music",
+)
 
 
 @dataclass
@@ -53,11 +69,28 @@ class _CreateState:
     cur_right: tuple[float, float] = (0.0, 0.0)
 
 
+@dataclass
+class _RadialState:
+    """Left-hand pinch-and-hold radial-menu state.
+
+    origin stores the raw (un-mirrored) camera-space pinch position, so the
+    preview can mirror when drawing.
+    """
+
+    pinching: bool = False
+    pinch_start: float = 0.0  # monotonic time of pinch start
+    active: bool = False  # True once the hold duration has elapsed
+    origin: tuple[float, float] = (0.0, 0.0)  # raw camera coords
+    cur: tuple[float, float] = (0.0, 0.0)  # raw camera coords
+    selected: int | None = None  # index into _RADIAL_APPS, or None (center)
+
+
 class DesktopController:
     def __init__(self, *, mirrored: bool = True) -> None:
         self._mirrored = mirrored
         self._cursor = _CursorState()
         self._create = _CreateState()
+        self._radial = _RadialState()
         self._disabled = False
         self._failsafe_start: float | None = None
         self._screen_w, self._screen_h = os_control.screen_size()
@@ -98,6 +131,7 @@ class DesktopController:
 
         self._handle_cursor(frame)
         self._handle_create(frame)
+        self._handle_radial(frame, now)
 
     # ---- failsafe: both-fist 5s hold ----
 
@@ -165,8 +199,12 @@ class DesktopController:
         nx = self._cursor.smooth_nx
         ny = self._cursor.smooth_ny
         assert ny is not None
-        sx = int(nx * self._screen_w)
-        sy = int(ny * self._screen_h)
+        # Apply input inset: camera [INSET, 1-INSET] → screen [0, 1].
+        span = 1.0 - 2 * _CURSOR_INSET
+        mapped_x = (nx - _CURSOR_INSET) / span
+        mapped_y = (ny - _CURSOR_INSET) / span
+        sx = int(mapped_x * self._screen_w)
+        sy = int(mapped_y * self._screen_h)
         sx = max(0, min(self._screen_w - 1, sx))
         sy = max(0, min(self._screen_h - 1, sy))
 
@@ -212,6 +250,92 @@ class DesktopController:
         x_min, x_max = min(lx, rx), max(lx, rx)
         y_min, y_max = min(ly, ry), max(ly, ry)
         return x_min, y_min, x_max - x_min, y_max - y_min
+
+    # ---- left-hand radial app launcher ----
+
+    def radial_state(
+        self,
+    ) -> tuple[tuple[float, float], tuple[float, float], int | None, float] | None:
+        """Return (origin_raw, cur_raw, selected_idx, progress) while active,
+        or None when not in radial mode. Progress is 0..1 during the hold
+        countdown; 1.0 once the wheel is active.
+        """
+        r = self._radial
+        if not r.pinching:
+            return None
+        progress = min(1.0, (self._last_now - r.pinch_start) / _RADIAL_HOLD_SECONDS)
+        # Only show the countdown if something noticeable has elapsed.
+        if not r.active and progress < 0.15:
+            return None
+        return r.origin, r.cur, r.selected, progress
+
+    @staticmethod
+    def radial_apps() -> tuple[str, ...]:
+        return _RADIAL_APPS
+
+    def _handle_radial(self, frame: FrameResult, now: float) -> None:
+        r = self._radial
+        left = frame.left
+        pinching = is_pinching(left) and left.features is not None
+
+        if not pinching:
+            if r.pinching and r.active and r.selected is not None:
+                # Commit: launch the highlighted app.
+                app = _RADIAL_APPS[r.selected]
+                os_control.launch_app(app)
+                self._events_out.append(f"launch:{app}")
+            # Reset everything.
+            r.pinching = False
+            r.active = False
+            r.selected = None
+            return
+
+        assert left.features is not None
+        f = left.features
+        # Use index/thumb midpoint for stability (same trick as cursor).
+        cx = (f.index_x + f.thumb_x) * 0.5
+        cy = (f.index_y + f.thumb_y) * 0.5
+
+        if not r.pinching:
+            r.pinching = True
+            r.pinch_start = now
+            r.active = False
+            r.origin = (cx, cy)
+            r.cur = (cx, cy)
+            r.selected = None
+            return
+
+        r.cur = (cx, cy)
+        if not r.active and (now - r.pinch_start) >= _RADIAL_HOLD_SECONDS:
+            r.active = True
+
+        if r.active:
+            # Decide which slice the current hand position falls into.
+            dx = cx - r.origin[0]
+            # Flip dy sign for angle so up = -y is "north" at angle 0.
+            dy = cy - r.origin[1]
+            # When preview is mirrored, the user's "right" in meatspace is
+            # raw camera LEFT (smaller x). Flip dx for angle so that moving
+            # the hand visually right in the preview selects slices on the
+            # right of the wheel.
+            if self._mirrored:
+                dx = -dx
+            dist = (dx * dx + dy * dy) ** 0.5
+            if dist < _RADIAL_SELECT_RADIUS:
+                r.selected = None
+            else:
+                import math
+
+                # atan2 gives angle from +x axis, CCW positive; image y is
+                # DOWN, so the returned angle treats "north" as -y (we want
+                # slice 0 at top of wheel). Rotate so 0 = up.
+                angle = math.atan2(dy, dx)  # -π..π, 0 = right, π/2 = down
+                # Convert to "clockwise from top": 0 = up, π/2 = right, π = down.
+                cw = (angle + math.pi / 2) % (2 * math.pi)
+                n = len(_RADIAL_APPS)
+                slice_size = 2 * math.pi / n
+                # Add half-slice so each app owns a slice centered on its direction.
+                r.selected = int((cw + slice_size / 2) // slice_size) % n
 
     def _handle_create(self, frame: FrameResult) -> None:
         left = frame.left

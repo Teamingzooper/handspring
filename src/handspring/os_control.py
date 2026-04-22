@@ -116,6 +116,19 @@ def new_finder_window(bounds: tuple[int, int, int, int] | None = None) -> None:
         )
 
 
+def launch_app(name: str) -> None:
+    """Launch/focus a macOS app by name (e.g. 'Safari', 'Finder')."""
+    if not _MAC:
+        return
+    with contextlib.suppress(subprocess.TimeoutExpired, FileNotFoundError):
+        subprocess.run(
+            ["open", "-a", name],
+            check=False,
+            capture_output=True,
+            timeout=2.0,
+        )
+
+
 def close_frontmost_window() -> None:
     """Close the frontmost window of the active application (Cmd+W)."""
     if not _MAC:

@@ -20,7 +20,10 @@ _INDEX_HTML = """<!doctype html>
   <title>handspring</title>
   <style>
     html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
-    img { position: fixed; inset: 0; width: 100vw; height: 100vh; object-fit: cover;
+    img { position: fixed;
+          top: 4vh; left: 4vw; width: 92vw; height: 88vh;
+          object-fit: cover; object-position: center;
+          border-radius: 10px;
           -webkit-user-select: none; user-select: none; pointer-events: none; }
   </style>
 </head>
