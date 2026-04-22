@@ -122,6 +122,12 @@ _CREATE_ENTRY_DISTANCE = 0.08
 _RESIZE_CORNER_RADIUS = 0.08
 _MIN_RESIZE_SIZE = 0.05
 _DESTROY_Y_THRESHOLD = 0.88  # palm y below which a released grab deletes the window
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
 _SPLIT_MIN_PULL = 0.15  # hands must pull apart by this much (on the dominant axis) to split
 _MIN_SPLIT_CHILD_SIZE = 0.04  # don't split windows too small to halve cleanly
 
@@ -474,20 +480,42 @@ class JarvisController:
         dy_growth = dy_end - dy_start
         if max(dx_growth, dy_growth) < _SPLIT_MIN_PULL:
             return  # fumble — no split
+        # Each half gets teleported so it's centered on the hand that "tore"
+        # it away. The hand with smaller coordinate on the split axis owns the
+        # "low" half (left for vertical, top for horizontal); the other hand
+        # owns the "high" half.
+        lx, ly = s.current_left
+        rx, ry = s.current_right
         if dx_growth >= dy_growth:
             # Vertical split line → left + right halves.
-            half = w.width / 2.0
-            if half < _MIN_SPLIT_CHILD_SIZE:
+            half_w = w.width / 2.0
+            if half_w < _MIN_SPLIT_CHILD_SIZE:
                 return
-            a = self.manager.create(x=w.x, y=w.y, width=half, height=w.height)
-            b = self.manager.create(x=w.x + half, y=w.y, width=half, height=w.height)
+            if lx <= rx:
+                low_hand, high_hand = (lx, ly), (rx, ry)
+            else:
+                low_hand, high_hand = (rx, ry), (lx, ly)
+            a_x = _clamp(low_hand[0] - half_w / 2.0, 0.0, 1.0 - half_w)
+            a_y = _clamp(low_hand[1] - w.height / 2.0, 0.0, 1.0 - w.height)
+            b_x = _clamp(high_hand[0] - half_w / 2.0, 0.0, 1.0 - half_w)
+            b_y = _clamp(high_hand[1] - w.height / 2.0, 0.0, 1.0 - w.height)
+            a = self.manager.create(x=a_x, y=a_y, width=half_w, height=w.height)
+            b = self.manager.create(x=b_x, y=b_y, width=half_w, height=w.height)
         else:
             # Horizontal split line → top + bottom halves.
-            half = w.height / 2.0
-            if half < _MIN_SPLIT_CHILD_SIZE:
+            half_h = w.height / 2.0
+            if half_h < _MIN_SPLIT_CHILD_SIZE:
                 return
-            a = self.manager.create(x=w.x, y=w.y, width=w.width, height=half)
-            b = self.manager.create(x=w.x, y=w.y + half, width=w.width, height=half)
+            if ly <= ry:
+                low_hand, high_hand = (lx, ly), (rx, ry)
+            else:
+                low_hand, high_hand = (rx, ry), (lx, ly)
+            a_x = _clamp(low_hand[0] - w.width / 2.0, 0.0, 1.0 - w.width)
+            a_y = _clamp(low_hand[1] - half_h / 2.0, 0.0, 1.0 - half_h)
+            b_x = _clamp(high_hand[0] - w.width / 2.0, 0.0, 1.0 - w.width)
+            b_y = _clamp(high_hand[1] - half_h / 2.0, 0.0, 1.0 - half_h)
+            a = self.manager.create(x=a_x, y=a_y, width=w.width, height=half_h)
+            b = self.manager.create(x=b_x, y=b_y, width=w.width, height=half_h)
         self.manager.destroy(w.id)
         self._events_out.append(("split", w.id))
         self._events_out.append(("created", a.id))
