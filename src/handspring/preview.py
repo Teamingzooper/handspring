@@ -287,6 +287,62 @@ def _draw_jarvis(frame: NDArray[np.uint8], jarvis: JarvisController, *, mirrored
             1,
         )
 
+    # Destroy zone: thin red strip at the bottom. Tints brighter when a grab
+    # enters it — telegraphs "release here to delete".
+    destroy_y = int(0.88 * h)
+    zone_active = jarvis.grab_in_destroy_zone()
+    zone_overlay = frame.copy()
+    zone_color = (60, 60, 230) if zone_active else (70, 70, 160)
+    cv2.rectangle(zone_overlay, (0, destroy_y), (w, h), zone_color, -1)
+    cv2.addWeighted(
+        zone_overlay,
+        0.35 if zone_active else 0.18,
+        frame,
+        1 - (0.35 if zone_active else 0.18),
+        0,
+        dst=frame,
+    )
+    cv2.line(frame, (0, destroy_y), (w, destroy_y), (80, 80, 230), 2 if zone_active else 1)
+    label = "TRASH — release here to delete" if zone_active else "TRASH"
+    cv2.putText(
+        frame,
+        label,
+        (12, destroy_y + 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (20, 20, 20),
+        4,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        label,
+        (12, destroy_y + 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (220, 220, 255),
+        1,
+        cv2.LINE_AA,
+    )
+
+    # Split preview: neon dashed line down/across the window showing where it
+    # will cut on release.
+    sp = jarvis.split_preview()
+    if sp is not None:
+        sw, axis = sp
+        sx0_n = 1.0 - (sw.x + sw.width) if mirrored else sw.x
+        sx0 = int(sx0_n * w)
+        sy0 = int(sw.y * h)
+        sx1 = int((sx0_n + sw.width) * w)
+        sy1 = int((sw.y + sw.height) * h)
+        if axis == "vertical":
+            mx = (sx0 + sx1) // 2
+            _dotted_line(frame, (mx, sy0), (mx, sy1), (136, 255, 0), thickness=3, gap=12)
+        else:
+            my = (sy0 + sy1) // 2
+            _dotted_line(frame, (sx0, my), (sx1, my), (136, 255, 0), thickness=3, gap=12)
+        _label_with_shadow(frame, sx0 + 8, sy0 + 40, "SPLIT", (136, 255, 0))
+
     pending = jarvis.pending_rect()
     if pending is not None:
         px, py, pw, ph = pending

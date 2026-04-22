@@ -136,6 +136,10 @@ class OscEmitter:
                 self._client.send_message("/jarvis/window_created", int(window_id))
             elif kind == "tap":
                 self._client.send_message("/jarvis/window_tap", int(window_id))
+            elif kind == "destroyed":
+                self._client.send_message("/jarvis/window_destroyed", int(window_id))
+            elif kind == "split":
+                self._client.send_message("/jarvis/window_split", int(window_id))
         if window_count != self._last_window_count:
             self._client.send_message("/jarvis/window_count", int(window_count))
             self._last_window_count = window_count

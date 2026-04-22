@@ -100,6 +100,9 @@ class WindowManager:
             return
         self._replace(replace(w, color_idx=(w.color_idx + 1) % _NUM_COLORS))
 
+    def destroy(self, window_id: int) -> None:
+        self._windows = [w for w in self._windows if w.id != window_id]
+
     def _replace(self, new_w: Window) -> None:
         for i, w in enumerate(self._windows):
             if w.id == new_w.id:
@@ -118,6 +121,9 @@ _PINCH_ON_THRESHOLD = 0.85
 _CREATE_ENTRY_DISTANCE = 0.08
 _RESIZE_CORNER_RADIUS = 0.08
 _MIN_RESIZE_SIZE = 0.05
+_DESTROY_Y_THRESHOLD = 0.88  # palm y below which a released grab deletes the window
+_SPLIT_MIN_PULL = 0.15  # hands must pull apart by this much (on the dominant axis) to split
+_MIN_SPLIT_CHILD_SIZE = 0.04  # don't split windows too small to halve cleanly
 
 
 @dataclass
@@ -130,6 +136,15 @@ class _GrabState:
 
 @dataclass
 class _CreateState:
+    start_left: tuple[float, float]
+    start_right: tuple[float, float]
+    current_left: tuple[float, float]
+    current_right: tuple[float, float]
+
+
+@dataclass
+class _SplitState:
+    window_id: int
     start_left: tuple[float, float]
     start_right: tuple[float, float]
     current_left: tuple[float, float]
@@ -152,6 +167,7 @@ class JarvisController:
         self._grab: _GrabState | None = None
         self._create: _CreateState | None = None
         self._resize: _ResizeState | None = None
+        self._split: _SplitState | None = None
         self._hover_frames: dict[Side, int] = {"left": 0, "right": 0}
         self._last_hover_window: dict[Side, int | None] = {"left": None, "right": None}
         self._tap_cooldown_by_window: dict[int, float] = {}
@@ -165,7 +181,8 @@ class JarvisController:
     def pop_events(self) -> list[tuple[str, int]]:
         """Return events accumulated during update() and clear the buffer.
 
-        Event tuples: (kind, window_id). Kinds: "created" | "tap".
+        Event tuples: (kind, window_id). Kinds:
+        "created" | "tap" | "destroyed" | "split".
         """
         out = self._events_out
         self._events_out = []
@@ -188,6 +205,8 @@ class JarvisController:
 
         if self._handle_resize(frame, now):
             return  # resize takes the frame
+        if self._handle_split(frame, now):
+            return  # split takes the frame (both-hand fist pull-apart)
 
         self._handle_create(frame, now)
         self._handle_grab(frame, now)
@@ -366,6 +385,10 @@ class JarvisController:
         grab = self._grab
         state = getattr(frame, grab.side)
         if not state.present or state.features is None or state.gesture != "fist":
+            # Released — if the window is near the bottom, destroy it (trash zone).
+            if grab.last_palm_y > _DESTROY_Y_THRESHOLD:
+                self.manager.destroy(grab.window_id)
+                self._events_out.append(("destroyed", grab.window_id))
             self._grab = None
             return
         dx = state.features.x - grab.last_palm_x
@@ -377,6 +400,116 @@ class JarvisController:
             last_palm_x=state.features.x,
             last_palm_y=state.features.y,
         )
+
+    def grabbed_window_id(self) -> int | None:
+        return self._grab.window_id if self._grab is not None else None
+
+    def grab_in_destroy_zone(self) -> bool:
+        """True when the active grab's palm is in the bottom destroy strip."""
+        return self._grab is not None and self._grab.last_palm_y > _DESTROY_Y_THRESHOLD
+
+    # ---- Split: both hands fist on the same window, pull apart ----
+
+    def _handle_split(self, frame: FrameResult, _now: float) -> bool:
+        left = frame.left
+        right = frame.right
+        both_fist = (
+            left.present
+            and right.present
+            and left.gesture == "fist"
+            and right.gesture == "fist"
+            and left.features is not None
+            and right.features is not None
+        )
+
+        if self._split is not None:
+            if not both_fist:
+                # Released — try to commit.
+                self._commit_split()
+                self._split = None
+                return True  # consumed the frame
+            # Safe: both_fist already ensured features are not None.
+            assert left.features is not None and right.features is not None
+            self._split = replace(
+                self._split,
+                current_left=(left.features.x, left.features.y),
+                current_right=(right.features.x, right.features.y),
+            )
+            return True
+
+        # Not splitting — try to enter. Requires both hands fist over the SAME window.
+        if not both_fist:
+            return False
+        assert left.features is not None and right.features is not None
+        lw = self.manager.topmost_at(left.features.x, left.features.y)
+        rw = self.manager.topmost_at(right.features.x, right.features.y)
+        if lw is None or rw is None or lw.id != rw.id:
+            return False
+        # Cancel any lingering single-hand grab — split takes over.
+        self._grab = None
+        self.manager.promote(lw.id)
+        lp = (left.features.x, left.features.y)
+        rp = (right.features.x, right.features.y)
+        self._split = _SplitState(
+            window_id=lw.id,
+            start_left=lp,
+            start_right=rp,
+            current_left=lp,
+            current_right=rp,
+        )
+        return True
+
+    def _commit_split(self) -> None:
+        s = self._split
+        if s is None:
+            return
+        w = self.manager.get(s.window_id)
+        if w is None:
+            return
+        dx_start = abs(s.start_left[0] - s.start_right[0])
+        dy_start = abs(s.start_left[1] - s.start_right[1])
+        dx_end = abs(s.current_left[0] - s.current_right[0])
+        dy_end = abs(s.current_left[1] - s.current_right[1])
+        dx_growth = dx_end - dx_start
+        dy_growth = dy_end - dy_start
+        if max(dx_growth, dy_growth) < _SPLIT_MIN_PULL:
+            return  # fumble — no split
+        if dx_growth >= dy_growth:
+            # Vertical split line → left + right halves.
+            half = w.width / 2.0
+            if half < _MIN_SPLIT_CHILD_SIZE:
+                return
+            a = self.manager.create(x=w.x, y=w.y, width=half, height=w.height)
+            b = self.manager.create(x=w.x + half, y=w.y, width=half, height=w.height)
+        else:
+            # Horizontal split line → top + bottom halves.
+            half = w.height / 2.0
+            if half < _MIN_SPLIT_CHILD_SIZE:
+                return
+            a = self.manager.create(x=w.x, y=w.y, width=w.width, height=half)
+            b = self.manager.create(x=w.x, y=w.y + half, width=w.width, height=half)
+        self.manager.destroy(w.id)
+        self._events_out.append(("split", w.id))
+        self._events_out.append(("created", a.id))
+        self._events_out.append(("created", b.id))
+
+    def split_preview(self) -> tuple[Window, str] | None:
+        """Return (window, axis) where axis is 'vertical' or 'horizontal' for the
+        prospective split line, or None if not splitting."""
+        s = self._split
+        if s is None:
+            return None
+        w = self.manager.get(s.window_id)
+        if w is None:
+            return None
+        dx_growth = abs(s.current_left[0] - s.current_right[0]) - abs(
+            s.start_left[0] - s.start_right[0]
+        )
+        dy_growth = abs(s.current_left[1] - s.current_right[1]) - abs(
+            s.start_left[1] - s.start_right[1]
+        )
+        axis = "vertical" if dx_growth >= dy_growth else "horizontal"
+        return w, axis
 
     # ---- 3. Tap: point + hover on window for _TAP_HOVER_FRAMES frames ----
 

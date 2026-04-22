@@ -540,3 +540,77 @@ def test_resize_enforces_minimum_size():
     assert resized is not None
     assert resized.width >= 0.05
     assert resized.height >= 0.05
+
+
+# ---------------------------------------------------------------------------
+# Split (two-hand fist + pull apart) and destroy (drop in bottom zone)
+# ---------------------------------------------------------------------------
+
+
+def test_destroy_on_release_in_bottom_zone():
+    c = JarvisController()
+    w = c.manager.create(x=0.3, y=0.3, width=0.3, height=0.3)
+    # Grab with a fist at palm (0.45, 0.45) — inside window.
+    c.update(_frame(_absent(), _hand("fist", 0.45, 0.45)))
+    assert c.grabbed_window_id() == w.id
+    # Drag down into the destroy zone (y > 0.88).
+    c.update(_frame(_absent(), _hand("fist", 0.45, 0.92)))
+    assert c.grab_in_destroy_zone() is True
+    # Release (open hand) in the zone → window removed.
+    c.update(_frame(_absent(), _hand("open", 0.45, 0.92)))
+    assert c.manager.get(w.id) is None
+    events = c.pop_events()
+    assert ("destroyed", w.id) in events
+
+
+def test_release_above_zone_does_not_destroy():
+    c = JarvisController()
+    w = c.manager.create(x=0.3, y=0.3, width=0.3, height=0.3)
+    c.update(_frame(_absent(), _hand("fist", 0.45, 0.45)))
+    c.update(_frame(_absent(), _hand("open", 0.45, 0.45)))
+    assert c.manager.get(w.id) is not None
+    assert ("destroyed", w.id) not in c.pop_events()
+
+
+def test_split_vertical_creates_left_and_right_halves():
+    c = JarvisController()
+    w = c.manager.create(x=0.3, y=0.3, width=0.4, height=0.4)
+    # Both fists inside the window, hands close together.
+    c.update(_frame(_hand("fist", 0.45, 0.5), _hand("fist", 0.55, 0.5)))
+    # Pull apart horizontally (dx_growth ~ 0.5).
+    c.update(_frame(_hand("fist", 0.2, 0.5), _hand("fist", 0.8, 0.5)))
+    # Release (open left fist).
+    c.update(_frame(_hand("open", 0.2, 0.5), _hand("fist", 0.8, 0.5)))
+    wins = c.manager.windows()
+    assert len(wins) == 2
+    # Original window gone.
+    assert c.manager.get(w.id) is None
+    widths = sorted(x.width for x in wins)
+    assert abs(widths[0] - 0.2) < 1e-6 and abs(widths[1] - 0.2) < 1e-6
+    events = c.pop_events()
+    assert ("split", w.id) in events
+
+
+def test_split_horizontal_when_pulled_vertically():
+    c = JarvisController()
+    w = c.manager.create(x=0.3, y=0.3, width=0.4, height=0.4)
+    c.update(_frame(_hand("fist", 0.5, 0.45), _hand("fist", 0.5, 0.55)))
+    c.update(_frame(_hand("fist", 0.5, 0.2), _hand("fist", 0.5, 0.8)))
+    c.update(_frame(_hand("open", 0.5, 0.2), _hand("fist", 0.5, 0.8)))
+    wins = c.manager.windows()
+    assert len(wins) == 2
+    assert c.manager.get(w.id) is None
+    # Each has height 0.2, full original width 0.4.
+    for child in wins:
+        assert abs(child.width - 0.4) < 1e-6
+        assert abs(child.height - 0.2) < 1e-6
+
+
+def test_split_fumble_no_pull_keeps_original():
+    c = JarvisController()
+    w = c.manager.create(x=0.3, y=0.3, width=0.4, height=0.4)
+    c.update(_frame(_hand("fist", 0.45, 0.5), _hand("fist", 0.55, 0.5)))
+    # Release without pulling apart.
+    c.update(_frame(_hand("open", 0.45, 0.5), _hand("fist", 0.55, 0.5)))
+    assert c.manager.get(w.id) is not None
+    assert len(c.manager.windows()) == 1
