@@ -302,9 +302,13 @@ def _draw_synth_hint(frame: NDArray[np.uint8], hint: UiHint, *, mirrored: bool) 
 
     if hint.kind == "slider":
         cx = int(display_x * w) + 24
-        cy = int(hint.y * h)
         _draw_slider(
-            frame, cx=cx, cy=cy, label=hint.label_a, value=hint.value_a, display=hint.display_a
+            frame,
+            cx=cx,
+            label=hint.label_a,
+            value=hint.value_a,
+            display=hint.display_a,
+            live_y=hint.live_y,
         )
     elif hint.kind == "xy":
         cx = int(display_x * w)
@@ -324,30 +328,88 @@ def _draw_slider(
     frame: NDArray[np.uint8],
     *,
     cx: int,
-    cy: int,
     label: str,
     value: float,
     display: str,
+    live_y: float,
 ) -> None:
-    height = 140
-    width = 18
+    h, w = frame.shape[:2]
+    width = 36
+    y_top = int(0.10 * h)
+    y_bottom = int(0.90 * h)
     x0 = cx
-    y0 = cy - height // 2
-    # Track
-    cv2.rectangle(frame, (x0, y0), (x0 + width, y0 + height), (40, 40, 40), -1)
-    cv2.rectangle(frame, (x0, y0), (x0 + width, y0 + height), (136, 255, 0), 2)
-    # Fill (bottom-up)
-    fill_px = int(value * (height - 4))
+    # Keep the slider on-screen: clamp x0 so it doesn't run off the right edge.
+    x0 = min(x0, w - width - 180)  # leave room for label on the right
+    x0 = max(x0, 12)
+
+    # Track (dark background)
+    cv2.rectangle(frame, (x0, y_top), (x0 + width, y_bottom), (30, 30, 30), -1)
+    cv2.rectangle(frame, (x0, y_top), (x0 + width, y_bottom), (136, 255, 0), 2)
+
+    # Fill from y_bottom up to the fingertip Y (clamped into the track).
+    live_y_clamped = max(0.0, min(1.0, live_y))
+    fill_top_px = int(live_y_clamped * h)
+    fill_top_px = max(y_top + 2, min(y_bottom - 2, fill_top_px))
     cv2.rectangle(
         frame,
-        (x0 + 2, y0 + height - 2 - fill_px),
-        (x0 + width - 2, y0 + height - 2),
+        (x0 + 2, fill_top_px),
+        (x0 + width - 2, y_bottom - 2),
         (136, 255, 0),
         -1,
     )
-    # Label
-    _label(frame, x0 + width + 6, y0 + 12, label)
-    _label(frame, x0 + width + 6, y0 + height - 4, display)
+
+    # Horizontal "fingertip indicator" tick on the fill's top edge — extends a bit outside the track.
+    cv2.line(
+        frame,
+        (x0 - 6, fill_top_px),
+        (x0 + width + 6, fill_top_px),
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+
+    # Label (parameter name) + value text to the right of the slider.
+    label_x = x0 + width + 12
+    cv2.putText(
+        frame,
+        label,
+        (label_x, y_top + 20),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (0, 0, 0),
+        3,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        label,
+        (label_x, y_top + 20),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (230, 230, 230),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        display,
+        (label_x, y_top + 44),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (0, 0, 0),
+        3,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        display,
+        (label_x, y_top + 44),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (136, 255, 0),
+        1,
+        cv2.LINE_AA,
+    )
 
 
 def _draw_xy(

@@ -206,3 +206,21 @@ def test_slider_anchor_clears_on_mode_change():
     # Should anchor at the new point position, not the old one.
     assert abs(hint.x - 0.3) < 1e-6
     assert abs(hint.y - 0.3) < 1e-6
+
+
+def test_slider_live_y_tracks_current_fingertip():
+    p = SynthParams()
+    c = SynthController(p)
+    for _ in range(3):
+        c.update(_frame(_hand("fist"), _hand("point", x=0.5, y=0.3)))
+    h1 = c.ui_hint()
+    assert h1.kind == "slider"
+    assert abs(h1.live_y - 0.3) < 1e-6
+    c.update(_frame(_hand("fist"), _hand("point", x=0.5, y=0.8)))
+    h2 = c.ui_hint()
+    assert h2.kind == "slider"
+    # Anchor unchanged.
+    assert abs(h2.x - h1.x) < 1e-6
+    assert abs(h2.y - h1.y) < 1e-6
+    # But live_y tracks the new finger Y.
+    assert abs(h2.live_y - 0.8) < 1e-6

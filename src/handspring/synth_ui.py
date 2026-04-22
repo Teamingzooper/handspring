@@ -47,9 +47,10 @@ class UiHint:
     label_b: str
     value_b: float
     display_b: str
+    live_y: float  # NEW — current fingertip Y, used for 1:1 slider fill
 
 
-_NO_HINT = UiHint("none", 0.0, 0.0, "", 0.0, "", "", 0.0, "")
+_NO_HINT = UiHint("none", 0.0, 0.0, "", 0.0, "", "", 0.0, "", live_y=0.0)
 
 
 def _lerp(lo: float, hi: float, t: float) -> float:
@@ -155,6 +156,7 @@ class SynthController:
                 label_b="",
                 value_b=0.0,
                 display_b="",
+                live_y=f.index_y,
             )
         elif right.gesture == "open":
             pitch_t = _y_to_norm(f.y)
@@ -174,6 +176,7 @@ class SynthController:
                 label_b="pitch",
                 value_b=pitch_t,
                 display_b=f"{_hz_to_note(note_hz)} ({note_hz:.0f} Hz)",
+                live_y=f.index_y,
             )
         else:
             self._clear_slider_anchor()
@@ -203,6 +206,7 @@ class SynthController:
                 label_b="",
                 value_b=0.0,
                 display_b="",
+                live_y=f.index_y,
             )
         elif left.gesture == "open":
             depth_t = _y_to_norm(f.y)
@@ -222,6 +226,7 @@ class SynthController:
                 label_b="mod_depth",
                 value_b=depth_t,
                 display_b=f"{mod_depth:.2f}",
+                live_y=f.index_y,
             )
         else:
             self._clear_slider_anchor()
