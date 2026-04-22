@@ -171,6 +171,44 @@ def new_app_window(name: str, bounds: tuple[int, int, int, int] | None = None) -
         )
 
 
+def scroll(dy_pixels: float) -> None:
+    """Post a vertical scroll-wheel event. Positive dy = scroll up."""
+    if not _AVAILABLE:
+        return
+    # kCGScrollEventUnitPixel = 0, unit line = 1. Use pixels for smoother feel.
+    evt = Quartz.CGEventCreateScrollWheelEvent(None, 0, 1, int(dy_pixels))
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, evt)
+
+
+def screenshot(mode: str = "screen") -> str | None:
+    """Run ``screencapture`` in the requested mode.
+
+    mode:
+      - "screen": silent full-display capture → saved immediately.
+      - "window": user clicks a window to capture.
+      - "selection": user drags a rectangle to capture.
+
+    Returns the saved file path on "screen", None on interactive modes
+    (screencapture handles the filename prompt itself if no path given).
+    """
+    if not _MAC:
+        return None
+    import datetime
+    import os
+
+    home = os.path.expanduser("~")
+    ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    path = f"{home}/Desktop/handspring_{ts}.png"
+    flags = {"screen": ["-x"], "window": ["-w", "-x"], "selection": ["-s", "-x"]}.get(mode, ["-x"])
+    with contextlib.suppress(subprocess.TimeoutExpired, FileNotFoundError):
+        subprocess.Popen(
+            ["screencapture", *flags, path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    return path
+
+
 def close_frontmost_window() -> None:
     """Close the frontmost window of the active application (Cmd+W)."""
     if not _MAC:

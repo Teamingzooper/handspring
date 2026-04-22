@@ -168,20 +168,32 @@ def main(argv: list[str] | None = None) -> int:
             if overlay_inst is not None and desktop is not None:
                 rs = desktop.radial_state()
                 radial_payload: (
-                    tuple[tuple[int, int], int | None, float, tuple[str, ...]] | None
+                    tuple[
+                        tuple[int, int],
+                        int | None,
+                        int | None,
+                        float,
+                        tuple[tuple[str, tuple[str, ...]], ...],
+                    ]
+                    | None
                 ) = None
                 if rs is not None:
-                    origin_raw, _cur_raw, selected, progress = rs
-                    # Convert raw camera coords to screen coords (reuse the
-                    # same inset mapping as the cursor).
+                    origin_raw, _cur_raw, hovered_root, hovered_sub, progress = rs
                     screen_origin = _cam_to_screen(
                         origin_raw[0], origin_raw[1], desktop, mirrored=args.mirror
                     )
-                    radial_payload = (screen_origin, selected, progress, desktop.radial_apps())
+                    radial_payload = (
+                        screen_origin,
+                        hovered_root,
+                        hovered_sub,
+                        progress,
+                        desktop.root_items(),
+                    )
                 overlay.set_state(
                     cursor=desktop.left_cursor_screen(),
                     radial=radial_payload,
                     selected_app=desktop.selected_app(),
+                    mode=desktop.mode(),
                     pending_rect=desktop.pending_create_screen_bounds(),
                     committed_rect=desktop.post_spawn_screen_bounds(),
                 )
@@ -280,10 +292,7 @@ def _overlay_status(
                 cv2.LINE_AA,
             )
 
-    # Radial app launcher (left hand pinch-and-hold).
-    rs = desktop.radial_state()
-    if rs is not None:
-        _draw_radial(display, rs, desktop.radial_apps(), mirrored=mirrored)
+    # Radial menu is rendered by the native overlay — not duplicated here.
     if not desktop.enabled():
         # Red "DISABLED" pill at top-center.
         text = "GESTURES DISABLED (hold both fists 5s to re-enable)"
@@ -337,117 +346,6 @@ def _overlay_status(
                 1,
                 cv2.LINE_AA,
             )
-
-
-def _draw_radial(
-    display: NDArray[np.uint8],
-    rs: tuple[tuple[float, float], tuple[float, float], int | None, float],
-    apps: tuple[str, ...],
-    *,
-    mirrored: bool,
-) -> None:
-    """Draw a radial slice menu centered at the pinch origin."""
-    import math
-
-    h, w = display.shape[:2]
-    origin_raw, _cur_raw, selected, progress = rs
-    ox_n = 1.0 - origin_raw[0] if mirrored else origin_raw[0]
-    oy_n = origin_raw[1]
-    cx = int(ox_n * w)
-    cy = int(oy_n * h)
-    # Keep the wheel on-screen.
-    r_outer = 110
-    cx = max(r_outer + 10, min(w - r_outer - 10, cx))
-    cy = max(r_outer + 10, min(h - r_outer - 10, cy))
-    r_inner = 30
-
-    # Background disk (translucent).
-    overlay = display.copy()
-    cv2.circle(overlay, (cx, cy), r_outer, (20, 20, 20), -1)
-    cv2.addWeighted(overlay, 0.65, display, 0.35, 0, dst=display)
-    cv2.circle(display, (cx, cy), r_outer, (100, 200, 255), 2)
-    cv2.circle(display, (cx, cy), r_inner, (100, 200, 255), 1)
-
-    n = len(apps)
-    slice_size = 2 * math.pi / n
-    for i, name in enumerate(apps):
-        # Slice center angle: 0 = up, clockwise.
-        center_cw = i * slice_size
-        # Convert to screen angle (+x = right, +y = down): angle from +x CCW.
-        # cw_from_up → screen_angle: screen_angle = -π/2 + cw_from_up.
-        screen_angle = -math.pi / 2 + center_cw
-        lx = int(cx + (r_outer * 0.65) * math.cos(screen_angle))
-        ly = int(cy + (r_outer * 0.65) * math.sin(screen_angle))
-        highlighted = (selected == i) and progress >= 1.0
-        color = (136, 255, 0) if highlighted else (220, 220, 220)
-        thick = 2 if highlighted else 1
-        # Divider line.
-        divider_angle = -math.pi / 2 + (i - 0.5) * slice_size
-        dx = int(cx + r_outer * math.cos(divider_angle))
-        dy = int(cy + r_outer * math.sin(divider_angle))
-        cv2.line(display, (cx, cy), (dx, dy), (60, 60, 60), 1, cv2.LINE_AA)
-        # App label.
-        (tw, _), _ = cv2.getTextSize(name, cv2.FONT_HERSHEY_SIMPLEX, 0.5, thick)
-        cv2.putText(
-            display,
-            name,
-            (lx - tw // 2, ly + 5),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (20, 20, 20),
-            3,
-            cv2.LINE_AA,
-        )
-        cv2.putText(
-            display,
-            name,
-            (lx - tw // 2, ly + 5),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            color,
-            thick,
-            cv2.LINE_AA,
-        )
-
-    # Hold-progress arc on the inner ring (until active).
-    if progress < 1.0:
-        end_angle = int(360 * progress)
-        cv2.ellipse(
-            display,
-            (cx, cy),
-            (r_inner + 6, r_inner + 6),
-            -90,
-            0,
-            end_angle,
-            (255, 220, 60),
-            3,
-            cv2.LINE_AA,
-        )
-
-    # Center hint.
-    hint = "RELEASE=cancel" if selected is None and progress >= 1.0 else ""
-    if hint:
-        (tw, _), _ = cv2.getTextSize(hint, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-        cv2.putText(
-            display,
-            hint,
-            (cx - tw // 2, cy + r_outer + 20),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
-            (20, 20, 20),
-            3,
-            cv2.LINE_AA,
-        )
-        cv2.putText(
-            display,
-            hint,
-            (cx - tw // 2, cy + r_outer + 20),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
-            (220, 220, 220),
-            1,
-            cv2.LINE_AA,
-        )
 
 
 def _print_status(result: FrameResult, desktop: DesktopController | None) -> None:

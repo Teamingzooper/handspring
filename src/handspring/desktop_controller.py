@@ -30,9 +30,12 @@ _CURSOR_SMOOTHING = 0.35
 # the dock or menubar — the "comfortable middle" covers the whole screen.
 _CURSOR_INSET = 0.08
 
-# Radial app launcher (left hand).
-_RADIAL_HOLD_SECONDS = 0.4  # pinch must be held this long to open the wheel
-_RADIAL_SELECT_RADIUS = 0.05  # hand must move this far from origin to commit a slice
+# Radial menu (left-hand). Distances are in raw camera-space (0..1).
+_RADIAL_HOLD_SECONDS = 0.4  # pinch-and-hold duration before the wheel opens
+_RADIAL_INNER = 0.03  # dead zone around the pinch origin
+_RADIAL_SUB_THRESHOLD = 0.10  # beyond this = selecting from the sub-ring
+
+# Radial tree: each root item has an optional submenu.
 _RADIAL_APPS: tuple[str, ...] = (
     "Finder",
     "Safari",
@@ -41,6 +44,18 @@ _RADIAL_APPS: tuple[str, ...] = (
     "Terminal",
     "Music",
 )
+_SCREENSHOT_SUBS: tuple[str, ...] = ("Screen", "Window", "Selection")
+# Tuples of (name, subs). Empty subs = leaf action.
+_ROOT_ITEMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("None", ()),
+    ("Create", _RADIAL_APPS),
+    ("Scroll", ()),
+    ("Screenshot", _SCREENSHOT_SUBS),
+)
+
+# Scroll-mode tuning.
+_SCROLL_DEADZONE = 0.12  # middle band (±% around 0.5 in normalized y) = no scroll
+_SCROLL_MAX_PIXELS = 30  # per-frame scroll delta at the screen edges
 
 
 @dataclass
@@ -73,16 +88,17 @@ class _CreateState:
 class _RadialState:
     """Left-hand pinch-and-hold radial-menu state.
 
-    origin stores the raw (un-mirrored) camera-space pinch position, so the
-    preview can mirror when drawing.
+    origin stores the raw (un-mirrored) camera-space pinch position so the
+    overlay / preview can mirror when drawing.
     """
 
     pinching: bool = False
     pinch_start: float = 0.0  # monotonic time of pinch start
     active: bool = False  # True once the hold duration has elapsed
-    origin: tuple[float, float] = (0.0, 0.0)  # raw camera coords
-    cur: tuple[float, float] = (0.0, 0.0)  # raw camera coords
-    selected: int | None = None  # index into _RADIAL_APPS, or None (center)
+    origin: tuple[float, float] = (0.0, 0.0)
+    cur: tuple[float, float] = (0.0, 0.0)
+    hovered_root: int | None = None  # which root slice is under the hand
+    hovered_sub: int | None = None  # which sub slice (of hovered_root) is under the hand
 
 
 class DesktopController:
@@ -95,7 +111,10 @@ class DesktopController:
         self._failsafe_start: float | None = None
         self._screen_w, self._screen_h = os_control.screen_size()
         self._events_out: list[str] = []
-        # App to spawn on the next both-hand-pinch-pull-apart. Defaults to Finder.
+        # Persistent mode selected via the radial tree. "create" is the default
+        # so the first both-hand-pinch spawns a Finder window immediately.
+        self._mode: str = "create"
+        # App to spawn when in create mode. Defaults to Finder.
         self._selected_app: str = _RADIAL_APPS[0]
         # Exposed for the native overlay: left-hand midpoint in screen pixels.
         self._left_cursor_screen: tuple[int, int] | None = None
@@ -106,6 +125,13 @@ class DesktopController:
 
     def selected_app(self) -> str:
         return self._selected_app
+
+    def mode(self) -> str:
+        return self._mode
+
+    @staticmethod
+    def root_items() -> tuple[tuple[str, tuple[str, ...]], ...]:
+        return _ROOT_ITEMS
 
     def left_cursor_screen(self) -> tuple[int, int] | None:
         """Screen pixel coords for the left hand (for the native overlay)."""
@@ -168,8 +194,14 @@ class DesktopController:
             return
 
         self._handle_cursor(frame)
-        self._handle_create(frame)
+        # Create gesture is only active when we're in create mode. Other
+        # modes might steal the left hand (scroll) or need the create path
+        # suppressed (none).
+        if self._mode == "create":
+            self._handle_create(frame)
         self._handle_radial(frame, now)
+        if self._mode == "scroll":
+            self._handle_scroll(frame)
 
     # ---- failsafe: both-fist 5s hold ----
 
@@ -293,23 +325,34 @@ class DesktopController:
 
     def radial_state(
         self,
-    ) -> tuple[tuple[float, float], tuple[float, float], int | None, float] | None:
-        """Return (origin_raw, cur_raw, selected_idx, progress) while active,
-        or None when not in radial mode. Progress is 0..1 during the hold
-        countdown; 1.0 once the wheel is active.
+    ) -> tuple[tuple[float, float], tuple[float, float], int | None, int | None, float] | None:
+        """Return (origin, cur, hovered_root, hovered_sub, progress) for the overlay.
+
+        While progress < 1.0 only the countdown arc should render. Once
+        progress == 1.0 the wheel is open.
         """
         r = self._radial
         if not r.pinching:
             return None
         progress = min(1.0, (self._last_now - r.pinch_start) / _RADIAL_HOLD_SECONDS)
-        # Only show the countdown if something noticeable has elapsed.
-        if not r.active and progress < 0.15:
+        if not r.active and progress < 0.05:
             return None
-        return r.origin, r.cur, r.selected, progress
+        return r.origin, r.cur, r.hovered_root, r.hovered_sub, progress
 
     @staticmethod
     def radial_apps() -> tuple[str, ...]:
         return _RADIAL_APPS
+
+    def _slice_index(self, dx: float, dy: float, n: int) -> int:
+        """Return clockwise-from-top slice index in [0, n) for a direction vector."""
+        import math
+
+        if self._mirrored:
+            dx = -dx
+        angle = math.atan2(dy, dx)  # 0 = right (+x), π/2 = down (+y)
+        cw = (angle + math.pi / 2) % (2 * math.pi)  # 0 = up, clockwise
+        slice_size = 2 * math.pi / n
+        return int((cw + slice_size / 2) // slice_size) % n
 
     def _handle_radial(self, frame: FrameResult, now: float) -> None:
         r = self._radial
@@ -333,9 +376,7 @@ class DesktopController:
         else:
             self._left_cursor_screen = None
 
-        # If right hand is pinching, we're either clicking or in the middle of
-        # a both-hand-create gesture — suppress the radial entirely so left
-        # pinches don't also pop the wheel.
+        # Suppress radial if the right hand is doing something (clicking, create).
         right_pinching = is_pinching(right)
         pinching = (
             is_pinching(left)
@@ -345,19 +386,16 @@ class DesktopController:
         )
 
         if not pinching:
-            if r.pinching and r.active and r.selected is not None:
-                # Commit: SET the selected-app, don't launch anything yet.
-                self._selected_app = _RADIAL_APPS[r.selected]
-                self._events_out.append(f"select_app:{self._selected_app}")
-            # Reset everything.
+            if r.pinching and r.active:
+                self._commit_radial(r.hovered_root, r.hovered_sub)
             r.pinching = False
             r.active = False
-            r.selected = None
+            r.hovered_root = None
+            r.hovered_sub = None
             return
 
         assert left.features is not None
         f = left.features
-        # Use index/thumb midpoint for stability (same trick as cursor).
         cx = (f.index_x + f.thumb_x) * 0.5
         cy = (f.index_y + f.thumb_y) * 0.5
 
@@ -367,40 +405,87 @@ class DesktopController:
             r.active = False
             r.origin = (cx, cy)
             r.cur = (cx, cy)
-            r.selected = None
+            r.hovered_root = None
+            r.hovered_sub = None
             return
 
         r.cur = (cx, cy)
         if not r.active and (now - r.pinch_start) >= _RADIAL_HOLD_SECONDS:
             r.active = True
 
-        if r.active:
-            # Decide which slice the current hand position falls into.
-            dx = cx - r.origin[0]
-            # Flip dy sign for angle so up = -y is "north" at angle 0.
-            dy = cy - r.origin[1]
-            # When preview is mirrored, the user's "right" in meatspace is
-            # raw camera LEFT (smaller x). Flip dx for angle so that moving
-            # the hand visually right in the preview selects slices on the
-            # right of the wheel.
-            if self._mirrored:
-                dx = -dx
-            dist = (dx * dx + dy * dy) ** 0.5
-            if dist < _RADIAL_SELECT_RADIUS:
-                r.selected = None
-            else:
-                import math
+        if not r.active:
+            return
 
-                # atan2 gives angle from +x axis, CCW positive; image y is
-                # DOWN, so the returned angle treats "north" as -y (we want
-                # slice 0 at top of wheel). Rotate so 0 = up.
-                angle = math.atan2(dy, dx)  # -π..π, 0 = right, π/2 = down
-                # Convert to "clockwise from top": 0 = up, π/2 = right, π = down.
-                cw = (angle + math.pi / 2) % (2 * math.pi)
-                n = len(_RADIAL_APPS)
-                slice_size = 2 * math.pi / n
-                # Add half-slice so each app owns a slice centered on its direction.
-                r.selected = int((cw + slice_size / 2) // slice_size) % n
+        # Distance + angle from origin.
+        dx = cx - r.origin[0]
+        dy = cy - r.origin[1]
+        dist = (dx * dx + dy * dy) ** 0.5
+
+        if dist < _RADIAL_INNER:
+            r.hovered_root = None
+            r.hovered_sub = None
+            return
+
+        # Hovered root is determined by angle (always when past inner dead zone).
+        r.hovered_root = self._slice_index(dx, dy, len(_ROOT_ITEMS))
+
+        if dist < _RADIAL_SUB_THRESHOLD:
+            r.hovered_sub = None
+            return
+
+        # Past sub threshold: if the root has subs, pick one by the same angle.
+        subs = _ROOT_ITEMS[r.hovered_root][1]
+        if subs:
+            r.hovered_sub = self._slice_index(dx, dy, len(subs))
+        else:
+            r.hovered_sub = None
+
+    def _commit_radial(self, root_idx: int | None, sub_idx: int | None) -> None:
+        """Apply a radial selection on pinch release."""
+        if root_idx is None:
+            return
+        name, subs = _ROOT_ITEMS[root_idx]
+        if name == "None":
+            self._mode = "none"
+            self._events_out.append("mode:none")
+        elif name == "Create":
+            self._mode = "create"
+            if sub_idx is not None and sub_idx < len(subs):
+                self._selected_app = subs[sub_idx]
+                self._events_out.append(f"select_app:{self._selected_app}")
+            self._events_out.append("mode:create")
+        elif name == "Scroll":
+            self._mode = "scroll"
+            self._events_out.append("mode:scroll")
+        elif name == "Screenshot":
+            variant = subs[sub_idx].lower() if sub_idx is not None else "screen"
+            os_control.screenshot(variant)
+            self._events_out.append(f"screenshot:{variant}")
+            # Screenshot is one-shot — don't change persistent mode.
+
+    # ---- Scroll mode (left hand y → scroll wheel events) ----
+
+    def _handle_scroll(self, frame: FrameResult) -> None:
+        left = frame.left
+        if not left.present or left.features is None:
+            return
+        # Use normalized midpoint y (no need for mirror — vertical only).
+        f = left.features
+        ny = (f.index_y + f.thumb_y) * 0.5
+        # ny=0 at top, 1 at bottom. Scroll UP (positive) when above middle-top-band.
+        delta = ny - 0.5
+        if abs(delta) < _SCROLL_DEADZONE:
+            return
+        direction = -1 if delta < 0 else 1  # top (delta < 0) → -1 = scroll up-direction
+        # Ramp magnitude from deadzone edge to screen edge.
+        mag = (abs(delta) - _SCROLL_DEADZONE) / (0.5 - _SCROLL_DEADZONE)
+        mag = max(0.0, min(1.0, mag))
+        # Quartz scroll: positive dy = scroll up (content moves down = page-up).
+        # When the user's hand is at the TOP of frame (ny small), they want
+        # to scroll UP → dy positive.
+        dy_pixels = -direction * int(_SCROLL_MAX_PIXELS * mag)
+        if dy_pixels != 0:
+            os_control.scroll(dy_pixels)
 
     def _handle_create(self, frame: FrameResult) -> None:
         left = frame.left

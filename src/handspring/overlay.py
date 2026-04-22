@@ -33,24 +33,36 @@ def available() -> bool:
 # Using a dict avoids Objective-C typing complications with pyobjc properties.
 _state: dict[str, Any] = {
     "cursor": None,  # (screen_x, screen_y) or None
-    "radial": None,  # (origin_screen_xy, selected_idx, progress, apps) or None
-    "selected_app": "Finder",  # small label under the dot
-    "pending_rect": None,  # (x1, y1, x2, y2) while pinching to create
-    "committed_rect": None,  # (x1, y1, x2, y2) after release, until window appears
+    # Radial tree: (origin, hovered_root, hovered_sub, progress, root_items)
+    # root_items is a sequence of (name, subs). None = not visible.
+    "radial": None,
+    "selected_app": "Finder",
+    "mode": "create",  # "create" | "scroll" | "none"
+    "pending_rect": None,
+    "committed_rect": None,
 }
 
 
 def set_state(
     *,
     cursor: tuple[int, int] | None,
-    radial: tuple[tuple[int, int], int | None, float, tuple[str, ...]] | None,
+    radial: tuple[
+        tuple[int, int],
+        int | None,
+        int | None,
+        float,
+        tuple[tuple[str, tuple[str, ...]], ...],
+    ]
+    | None,
     selected_app: str,
+    mode: str,
     pending_rect: tuple[int, int, int, int] | None = None,
     committed_rect: tuple[int, int, int, int] | None = None,
 ) -> None:
     _state["cursor"] = cursor
     _state["radial"] = radial
     _state["selected_app"] = selected_app
+    _state["mode"] = mode
     _state["pending_rect"] = pending_rect
     _state["committed_rect"] = committed_rect
 
@@ -91,82 +103,124 @@ if _AVAILABLE:
                 Quartz.CGContextSetLineWidth(ctx, 2.0)
                 Quartz.CGContextStrokeRect(ctx, rect)
 
-            # Left-hand cursor: plain grey circle.
+            # Left-hand cursor: color + label depend on mode.
+            mode = _state["mode"]
+            if mode == "scroll":
+                dot_rgb = (0.30, 0.60, 1.0)
+                dot_label = "SCROLL"
+            elif mode == "none":
+                dot_rgb = (0.40, 0.40, 0.40)
+                dot_label = "NONE"
+            else:  # create
+                dot_rgb = (0.70, 0.70, 0.70)
+                dot_label = selected_app
+
             if cursor is not None:
                 cx, cy = cursor
-                Quartz.CGContextSetRGBFillColor(ctx, 0.70, 0.70, 0.70, 0.75)
+                Quartz.CGContextSetRGBFillColor(ctx, dot_rgb[0], dot_rgb[1], dot_rgb[2], 0.75)
                 Quartz.CGContextFillEllipseInRect(ctx, Quartz.CGRectMake(cx - 10, cy - 10, 20, 20))
-                # Selected-app label right under the dot.
                 _draw_label(
-                    selected_app,
+                    dot_label,
                     cx,
                     cy + 24,
-                    AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.80, 0.80, 0.80, 0.95),
+                    AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                        min(1.0, dot_rgb[0] + 0.1),
+                        min(1.0, dot_rgb[1] + 0.1),
+                        min(1.0, dot_rgb[2] + 0.1),
+                        0.95,
+                    ),
                     False,
                 )
 
-            # Radial menu (in screen coords).
+            # Radial tree.
             if radial is not None:
-                (ox, oy), selected, progress, apps = radial
-                r_outer = 140.0
-                r_inner = 40.0
-                # Background disk.
-                Quartz.CGContextSetRGBFillColor(ctx, 0.08, 0.08, 0.08, 0.78)
-                Quartz.CGContextFillEllipseInRect(
-                    ctx,
-                    Quartz.CGRectMake(ox - r_outer, oy - r_outer, r_outer * 2, r_outer * 2),
-                )
-                # Outer ring.
-                Quartz.CGContextSetRGBStrokeColor(ctx, 0.39, 0.78, 1.0, 1.0)
-                Quartz.CGContextSetLineWidth(ctx, 2.0)
+                (ox, oy), hovered_root, hovered_sub, progress, root_items = radial
+                _draw_radial_tree(ctx, ox, oy, hovered_root, hovered_sub, progress, root_items)
+
+    def _draw_radial_tree(
+        ctx: Any,
+        ox: float,
+        oy: float,
+        hovered_root: int | None,
+        hovered_sub: int | None,
+        progress: float,
+        root_items: tuple[tuple[str, tuple[str, ...]], ...],
+    ) -> None:
+        r_root = 110.0
+        r_sub = 200.0
+
+        # During the hold countdown, show ONLY the filling arc at a small
+        # radius — no slices yet.
+        if progress < 1.0:
+            Quartz.CGContextSetRGBStrokeColor(ctx, 0.75, 0.75, 0.75, 0.9)
+            Quartz.CGContextSetLineWidth(ctx, 5.0)
+            end_radians = -math.pi / 2 + 2 * math.pi * progress
+            Quartz.CGContextBeginPath(ctx)
+            Quartz.CGContextAddArc(ctx, ox, oy, 30.0, -math.pi / 2, end_radians, False)
+            Quartz.CGContextStrokePath(ctx)
+            return
+
+        # Root ring background.
+        Quartz.CGContextSetRGBFillColor(ctx, 0.08, 0.08, 0.08, 0.7)
+        Quartz.CGContextFillEllipseInRect(
+            ctx, Quartz.CGRectMake(ox - r_root, oy - r_root, r_root * 2, r_root * 2)
+        )
+        Quartz.CGContextSetRGBStrokeColor(ctx, 0.60, 0.60, 0.60, 0.9)
+        Quartz.CGContextSetLineWidth(ctx, 1.5)
+        Quartz.CGContextStrokeEllipseInRect(
+            ctx, Quartz.CGRectMake(ox - r_root, oy - r_root, r_root * 2, r_root * 2)
+        )
+
+        # Root slice labels + dividers.
+        n = len(root_items)
+        slice_size = 2 * math.pi / n
+        for i, (name, _) in enumerate(root_items):
+            screen_angle = -math.pi / 2 + i * slice_size
+            lx = ox + (r_root * 0.6) * math.cos(screen_angle)
+            ly = oy + (r_root * 0.6) * math.sin(screen_angle)
+            # Divider.
+            div_angle = -math.pi / 2 + (i - 0.5) * slice_size
+            dvx = ox + r_root * math.cos(div_angle)
+            dvy = oy + r_root * math.sin(div_angle)
+            Quartz.CGContextSetRGBStrokeColor(ctx, 0.30, 0.30, 0.30, 0.8)
+            Quartz.CGContextSetLineWidth(ctx, 1.0)
+            Quartz.CGContextBeginPath(ctx)
+            Quartz.CGContextMoveToPoint(ctx, ox, oy)
+            Quartz.CGContextAddLineToPoint(ctx, dvx, dvy)
+            Quartz.CGContextStrokePath(ctx)
+            highlighted = i == hovered_root
+            color = (
+                AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.95, 0.95, 0.95, 1.0)
+                if highlighted
+                else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.75, 0.75, 0.75, 1.0)
+            )
+            _draw_label(name, lx, ly, color, highlighted)
+
+        # Sub ring (only if hovered_root has subs AND hand is past the sub threshold).
+        if hovered_root is not None:
+            _name, subs = root_items[hovered_root]
+            if subs and hovered_sub is not None:
+                # Dim ring behind sub labels.
+                Quartz.CGContextSetRGBStrokeColor(ctx, 0.50, 0.50, 0.50, 0.6)
+                Quartz.CGContextSetLineWidth(ctx, 1.0)
                 Quartz.CGContextStrokeEllipseInRect(
-                    ctx,
-                    Quartz.CGRectMake(ox - r_outer, oy - r_outer, r_outer * 2, r_outer * 2),
+                    ctx, Quartz.CGRectMake(ox - r_sub, oy - r_sub, r_sub * 2, r_sub * 2)
                 )
-                # Inner ring.
-                Quartz.CGContextStrokeEllipseInRect(
-                    ctx,
-                    Quartz.CGRectMake(ox - r_inner, oy - r_inner, r_inner * 2, r_inner * 2),
-                )
-                # Slice dividers + labels.
-                n = len(apps)
-                slice_size = 2 * math.pi / n
-                for i, name in enumerate(apps):
-                    center_cw = i * slice_size  # 0 = up, clockwise
-                    screen_angle = -math.pi / 2 + center_cw  # atan2-style
-                    label_r = r_outer * 0.65
-                    lx = ox + label_r * math.cos(screen_angle)
-                    ly = oy + label_r * math.sin(screen_angle)
-                    # Divider line.
-                    div_angle = -math.pi / 2 + (i - 0.5) * slice_size
-                    dx = ox + r_outer * math.cos(div_angle)
-                    dy = oy + r_outer * math.sin(div_angle)
-                    Quartz.CGContextSetRGBStrokeColor(ctx, 0.25, 0.25, 0.25, 0.9)
-                    Quartz.CGContextSetLineWidth(ctx, 1.0)
-                    Quartz.CGContextBeginPath(ctx)
-                    Quartz.CGContextMoveToPoint(ctx, ox, oy)
-                    Quartz.CGContextAddLineToPoint(ctx, dx, dy)
-                    Quartz.CGContextStrokePath(ctx)
-                    # Label.
-                    highlighted = (selected == i) and progress >= 1.0
+                m = len(subs)
+                sub_slice = 2 * math.pi / m
+                for j, sub_name in enumerate(subs):
+                    sangle = -math.pi / 2 + j * sub_slice
+                    slx = ox + (r_sub * 0.88) * math.cos(sangle)
+                    sly = oy + (r_sub * 0.88) * math.sin(sangle)
+                    sub_highlighted = j == hovered_sub
                     color = (
                         AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.53, 1.0, 0.0, 1.0)
-                        if highlighted
+                        if sub_highlighted
                         else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                            0.88, 0.88, 0.88, 1.0
+                            0.80, 0.80, 0.80, 0.9
                         )
                     )
-                    _draw_label(name, lx, ly, color, highlighted)
-                # Hold countdown arc on inner ring.
-                if progress < 1.0:
-                    end_radians = -math.pi / 2 + 2 * math.pi * progress
-                    Quartz.CGContextSetRGBStrokeColor(ctx, 1.0, 0.86, 0.23, 1.0)
-                    Quartz.CGContextSetLineWidth(ctx, 4.0)
-                    Quartz.CGContextBeginPath(ctx)
-                    Quartz.CGContextAddArc(
-                        ctx, ox, oy, r_inner + 8, -math.pi / 2, end_radians, False
-                    )
-                    Quartz.CGContextStrokePath(ctx)
+                    _draw_label(sub_name, slx, sly, color, sub_highlighted)
 
     def _draw_label(text: str, cx: float, cy: float, color: Any, bold: bool) -> None:
         attrs = {
