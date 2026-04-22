@@ -44,9 +44,19 @@ class Preview:
 
     WINDOW_NAME = "handspring"
 
-    def __init__(self, *, mirror: bool = True) -> None:
+    def __init__(self, *, mirror: bool = True, show_window: bool = True) -> None:
         self._mirror = mirror
+        self._show_window = show_window
         self._created = False
+        self._last_display: NDArray[np.uint8] | None = None
+
+    def last_display(self) -> NDArray[np.uint8] | None:
+        """The most recent annotated BGR frame (post-mirror, post-overlay).
+
+        Useful for encoders (e.g., the MJPEG web server) that want to publish
+        the same image that was shown in the preview window.
+        """
+        return self._last_display
 
     def render(
         self,
@@ -110,6 +120,12 @@ class Preview:
             _draw_synth_panel(display, synth_snapshot)
         if app_mode == "synth" and synth_hint is not None and synth_hint.kind != "none":
             _draw_synth_hint(display, synth_hint, mirrored=self._mirror)
+
+        # Publish latest for consumers (web stream) BEFORE showing.
+        self._last_display = display
+
+        if not self._show_window:
+            return True
 
         if not self._created:
             cv2.namedWindow(self.WINDOW_NAME, cv2.WINDOW_NORMAL)

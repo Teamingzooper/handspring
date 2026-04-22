@@ -1,7 +1,17 @@
-"""`python -m handspring` entry point: camera → tracker → JARVIS windows + OSC.
+"""`python -m handspring` entry point: camera → tracker → macOS desktop control + web stream.
 
-Jarvis-only. The synth half lives in `handspring-synth` (see synth_app.py) —
-run the two in separate terminals.
+Gestures (when enabled):
+- Right index fingertip → system cursor position
+- Right-hand pinch → left-mouse click (down on pinch start, up on release)
+  (so pinching the title bar of a window and moving drags it naturally)
+- Both-hand pinch close together, then pull apart → new Finder window
+- Both-hand FIST held for 5 seconds → toggle failsafe (disables/enables gesture control)
+
+Also starts a local MJPEG web server at http://localhost:8765/ that serves the
+annotated camera feed — point Plash at this URL (or at the `web/` folder on
+disk) to use it as your desktop background.
+
+The synth half lives in the `handspring-synth` command (separate process).
 """
 
 from __future__ import annotations
@@ -16,18 +26,19 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from handspring import __version__
-from handspring.jarvis import JarvisController
+from handspring import __version__, os_control
+from handspring.desktop_controller import DesktopController
 from handspring.osc_out import OscEmitter
 from handspring.preview import Preview
 from handspring.tracker import Tracker, TrackerConfig
 from handspring.types import FrameResult
+from handspring.web_server import LatestFrame, WebServer
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="handspring",
-        description="Live gesture tracker + JARVIS window surface.",
+        description="Gesture → macOS desktop control + web stream.",
     )
     p.add_argument("--host", default="127.0.0.1", help="OSC receiver host (default: 127.0.0.1)")
     p.add_argument("--port", type=int, default=9000, help="OSC receiver port (default: 9000)")
@@ -43,13 +54,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="disable preview mirror",
     )
     p.add_argument(
+        "--no-os-control",
+        dest="os_control",
+        action="store_false",
+        help="disable macOS cursor/click/Finder gestures (still renders web stream)",
+    )
+    p.add_argument("--web-port", type=int, default=8765, help="web stream port (default: 8765)")
+    p.add_argument("--no-web", action="store_true", help="disable the MJPEG web server")
+    p.add_argument(
         "--fps-log-interval",
         type=float,
         default=0.5,
         help="print FPS + state to terminal every N seconds (default: 0.5)",
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    p.set_defaults(mirror=True)
+    p.set_defaults(mirror=True, os_control=True)
     return p.parse_args(argv)
 
 
@@ -79,20 +98,37 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     emitter = OscEmitter(host=args.host, port=args.port)
-    jarvis = JarvisController(mirrored=args.mirror)
+    desktop = DesktopController(mirrored=args.mirror) if args.os_control else None
 
-    preview = Preview(mirror=args.mirror) if not args.no_preview else None
+    preview = Preview(mirror=args.mirror, show_window=not args.no_preview)
+
+    latest: LatestFrame | None = None
+    web: WebServer | None = None
+    if not args.no_web:
+        latest = LatestFrame()
+        web = WebServer(port=args.web_port, latest=latest)
+        web.start()
+
     shutdown = _Shutdown()
 
-    print(f"handspring {__version__} (jarvis)", flush=True)
+    print(f"handspring {__version__}", flush=True)
     print(f"camera: {args.camera}", flush=True)
     print(f"OSC:    {args.host}:{args.port}", flush=True)
-    print(
-        f"hands:  {args.hands}   face: {'off' if args.no_face else 'on'}   "
-        f"pose: {'off' if args.no_pose else 'on'}",
-        flush=True,
-    )
-    print("For the synth, run `handspring-synth` in a separate terminal.", flush=True)
+    if web is not None:
+        print(f"web:    http://127.0.0.1:{args.web_port}/  (Plash-ready)", flush=True)
+    if args.os_control:
+        if os_control.available():
+            sw, sh = os_control.screen_size()
+            print(f"OS control: ON  (screen {sw}x{sh})", flush=True)
+            print(
+                "Note: requires Accessibility permission for the Python interpreter.",
+                flush=True,
+            )
+        else:
+            print("OS control: requested but unavailable on this platform", flush=True)
+    else:
+        print("OS control: OFF (--no-os-control)", flush=True)
+    print("Failsafe: hold BOTH fists for 5s to toggle gesture control.", flush=True)
     print("Ctrl+C to quit.", flush=True)
 
     last_log = 0.0
@@ -108,14 +144,10 @@ def main(argv: list[str] | None = None) -> int:
             emitter.emit(result)
             now = time.monotonic()
 
-            jarvis.update(result, now=now)
-            emitter.emit_app_mode("jarvis")
-            emitter.emit_jarvis_events(
-                jarvis.pop_events(),
-                window_count=len(jarvis.manager.windows()),
-            )
+            if desktop is not None:
+                desktop.update(result, now=now)
 
-            if preview is not None and not preview.render(
+            if not preview.render(
                 bgr,
                 tracker_output.hand_landmark_lists,
                 tracker_output.face_landmark_lists,
@@ -125,30 +157,101 @@ def main(argv: list[str] | None = None) -> int:
                 None,  # no synth snapshot
                 None,  # no synth hint
                 "jarvis",
-                jarvis,
+                None,  # no internal jarvis windows in desktop mode
             ):
                 break
 
+            # Publish the annotated frame to the web server.
+            if latest is not None:
+                display = preview.last_display()
+                if display is not None:
+                    # Overlay failsafe progress + disabled badge onto the web frame.
+                    if desktop is not None:
+                        _overlay_status(display, desktop)
+                    ok, buf = cv2.imencode(".jpg", display, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                    if ok:
+                        latest.set(buf.tobytes())
+
             if now - last_log >= args.fps_log_interval:
-                _print_status(result)
+                _print_status(result, desktop)
                 last_log = now
     finally:
         cap.release()
         tracker.close()
-        if preview is not None:
-            preview.close()
+        preview.close()
+        if web is not None:
+            web.stop()
         cv2.destroyAllWindows()
     print()
     return 0
 
 
-def _print_status(result: FrameResult) -> None:
+def _overlay_status(display: NDArray[np.uint8], desktop: DesktopController) -> None:
+    """Draw DISABLED banner + failsafe progress ring onto the display frame."""
+    h, w = display.shape[:2]
+    if not desktop.enabled():
+        # Red "DISABLED" pill at top-center.
+        text = "GESTURES DISABLED (hold both fists 5s to re-enable)"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.7
+        thick = 2
+        (tw, _), _ = cv2.getTextSize(text, font, scale, thick)
+        cx = (w - tw) // 2
+        cy = 80
+        cv2.rectangle(display, (cx - 14, cy - 28), (cx + tw + 14, cy + 10), (20, 20, 20), -1)
+        cv2.rectangle(display, (cx - 14, cy - 28), (cx + tw + 14, cy + 10), (40, 40, 230), 2)
+        cv2.putText(display, text, (cx, cy), font, scale, (40, 40, 230), thick, cv2.LINE_AA)
+    progress = desktop.failsafe_progress()
+    if progress > 0.0:
+        # Growing arc in the top-right as a countdown indicator.
+        cx_r = w - 60
+        cy_r = 60
+        radius = 40
+        cv2.circle(display, (cx_r, cy_r), radius, (40, 40, 40), 6, cv2.LINE_AA)
+        end_angle = int(360 * progress)
+        cv2.ellipse(
+            display,
+            (cx_r, cy_r),
+            (radius, radius),
+            -90,
+            0,
+            end_angle,
+            (255, 220, 60),
+            6,
+            cv2.LINE_AA,
+        )
+        label = "TOGGLING..." if progress > 0.1 else ""
+        if label:
+            cv2.putText(
+                display,
+                label,
+                (cx_r - 60, cy_r + radius + 22),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (20, 20, 20),
+                3,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                display,
+                label,
+                (cx_r - 60, cy_r + radius + 22),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 220, 60),
+                1,
+                cv2.LINE_AA,
+            )
+
+
+def _print_status(result: FrameResult, desktop: DesktopController | None) -> None:
     left = result.left.gesture if result.left.present else "-"
     right = result.right.gesture if result.right.present else "-"
-    face = result.face.expression if result.face.present else "-"
-    clap = "CLAP" if result.clap_event else "    "
+    state = ""
+    if desktop is not None:
+        state = "DISABLED" if not desktop.enabled() else "active"
     print(
-        f"\rFPS {result.fps:5.1f}  L:{left:<10} R:{right:<10} face:{face:<10} {clap}",
+        f"\rFPS {result.fps:5.1f}  L:{left:<10} R:{right:<10}  ctrl:{state:<9}",
         end="",
         flush=True,
     )

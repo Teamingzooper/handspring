@@ -1,6 +1,6 @@
 [project]
 name = "handspring"
-version = "0.8.0"
+version = "0.9.0"
 description = "Webcam gesture → OSC stream for creative coding"
 readme = "README.md"
 license = { text = "MIT" }
@@ -12,6 +12,11 @@ dependencies = [
     "python-osc>=1.8,<2",
     "numpy>=1.26,<3",
     "sounddevice>=0.4,<0.5",
+    # macOS OS-level control (cursor, clicks, AppleScript). These packages
+    # are no-ops to install on non-macOS but the runtime gracefully skips
+    # their usage (see os_control.available()).
+    'pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"',
+    'pyobjc-framework-ApplicationServices>=10.0; sys_platform == "darwin"',
 ]
 
 [project.optional-dependencies]
