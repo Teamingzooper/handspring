@@ -152,3 +152,57 @@ def test_play_mode_does_not_edit_params():
     c.update(_frame(_absent_hand(), _hand("point", y=0.0)))
     c.update(_frame(_absent_hand(), _hand("point", y=0.0)))
     assert p.snapshot().volume == initial_vol
+
+
+def test_slider_anchors_on_first_point_frame():
+    p = SynthParams()
+    c = SynthController(p)
+    # Enter edit_left
+    for _ in range(3):
+        c.update(_frame(_hand("fist"), _hand("point", x=0.5, y=0.8)))
+    hint = c.ui_hint()
+    assert hint.kind == "slider"
+    assert abs(hint.x - 0.5) < 1e-6
+    assert abs(hint.y - 0.8) < 1e-6
+
+    # Move hand to new position — slider position should NOT change.
+    c.update(_frame(_hand("fist"), _hand("point", x=0.3, y=0.2)))
+    hint2 = c.ui_hint()
+    assert hint2.kind == "slider"
+    assert abs(hint2.x - 0.5) < 1e-6  # still anchored
+    assert abs(hint2.y - 0.8) < 1e-6  # still anchored
+    # But value should have changed (y=0.2 gives different vol than y=0.8)
+    assert hint2.value_a != hint.value_a
+
+
+def test_slider_anchor_clears_when_leaving_point():
+    p = SynthParams()
+    c = SynthController(p)
+    for _ in range(3):
+        c.update(_frame(_hand("fist"), _hand("point", x=0.5, y=0.5)))
+    # Break to open — anchor should clear.
+    c.update(_frame(_hand("fist"), _hand("open", x=0.5, y=0.5)))
+    # Re-enter point at new position.
+    c.update(_frame(_hand("fist"), _hand("point", x=0.2, y=0.2)))
+    hint = c.ui_hint()
+    assert hint.kind == "slider"
+    assert abs(hint.x - 0.2) < 1e-6  # new anchor
+    assert abs(hint.y - 0.2) < 1e-6
+
+
+def test_slider_anchor_clears_on_mode_change():
+    p = SynthParams()
+    c = SynthController(p)
+    for _ in range(3):
+        c.update(_frame(_hand("fist"), _hand("point", x=0.5, y=0.5)))
+    # Drop left fist for 3 frames to exit mode.
+    for _ in range(3):
+        c.update(_frame(_hand("open"), _hand("open", x=0.5, y=0.5)))
+    # Now enter edit_right instead.
+    for _ in range(3):
+        c.update(_frame(_hand("point", x=0.3, y=0.3), _hand("fist")))
+    hint = c.ui_hint()
+    assert hint.kind == "slider"
+    # Should anchor at the new point position, not the old one.
+    assert abs(hint.x - 0.3) < 1e-6
+    assert abs(hint.y - 0.3) < 1e-6

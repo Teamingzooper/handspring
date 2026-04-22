@@ -76,6 +76,9 @@ class SynthController:
         self._right_fists: deque[bool] = deque(maxlen=_DEBOUNCE_N)
         self._active_mode: Literal["play", "edit_left", "edit_right"] = "play"
         self._last_hint: UiHint = _NO_HINT
+        self._slider_anchor: tuple[float, float] | None = None
+        self._anchor_owner_mode: str | None = None
+        self._prev_mode: str = "play"
 
     def update(self, frame: FrameResult) -> None:
         # Record fist state for debounce.
@@ -108,6 +111,11 @@ class SynthController:
 
         self._params.set_mode(self._active_mode)
 
+        # Clear slider anchor if mode changed since last update.
+        if self._active_mode != self._prev_mode:
+            self._clear_slider_anchor()
+        self._prev_mode = self._active_mode
+
         # Apply edits based on the non-fist hand.
         self._last_hint = _NO_HINT
         if self._active_mode == "edit_left":
@@ -120,17 +128,27 @@ class SynthController:
 
     # ---- Mode 1: left fist, right hand edits ----
 
+    def _clear_slider_anchor(self) -> None:
+        self._slider_anchor = None
+        self._anchor_owner_mode = None
+
     def _apply_edit_left(self, right: HandState) -> None:
         if not right.present or right.features is None:
+            self._clear_slider_anchor()
             return
         f = right.features
         if right.gesture == "point":
             vol = _y_to_norm(f.y)
             self._params.set_volume(vol)
+            # Anchor the slider at the first point-frame; stay pinned thereafter.
+            if self._slider_anchor is None or self._anchor_owner_mode != "edit_left":
+                self._slider_anchor = (f.index_x, f.index_y)
+                self._anchor_owner_mode = "edit_left"
+            anchor_x, anchor_y = self._slider_anchor
             self._last_hint = UiHint(
                 "slider",
-                x=f.x,
-                y=f.y,
+                x=anchor_x,
+                y=anchor_y,
                 label_a="volume",
                 value_a=vol,
                 display_a=f"{vol:.2f}",
@@ -145,6 +163,7 @@ class SynthController:
             stepping_hz = _lerp(STEP_MIN, STEP_MAX, step_t)
             self._params.set_note_hz(note_hz)
             self._params.set_stepping_hz(stepping_hz)
+            self._clear_slider_anchor()
             self._last_hint = UiHint(
                 "xy",
                 x=f.x,
@@ -156,21 +175,28 @@ class SynthController:
                 value_b=pitch_t,
                 display_b=f"{_hz_to_note(note_hz)} ({note_hz:.0f} Hz)",
             )
+        else:
+            self._clear_slider_anchor()
 
     # ---- Mode 2: right fist, left hand edits ----
 
     def _apply_edit_right(self, left: HandState) -> None:
         if not left.present or left.features is None:
+            self._clear_slider_anchor()
             return
         f = left.features
         if left.gesture == "point":
             cutoff_t = _y_to_norm(f.y)
             cutoff_hz = _log_lerp(CUTOFF_MIN, CUTOFF_MAX, cutoff_t)
             self._params.set_cutoff_hz(cutoff_hz)
+            if self._slider_anchor is None or self._anchor_owner_mode != "edit_right":
+                self._slider_anchor = (f.index_x, f.index_y)
+                self._anchor_owner_mode = "edit_right"
+            anchor_x, anchor_y = self._slider_anchor
             self._last_hint = UiHint(
                 "slider",
-                x=f.x,
-                y=f.y,
+                x=anchor_x,
+                y=anchor_y,
                 label_a="cutoff",
                 value_a=cutoff_t,
                 display_a=f"{cutoff_hz:.0f} Hz",
@@ -185,6 +211,7 @@ class SynthController:
             mod_rate = _log_lerp(MOD_RATE_MIN, MOD_RATE_MAX, rate_t)
             self._params.set_mod_depth(mod_depth)
             self._params.set_mod_rate(mod_rate)
+            self._clear_slider_anchor()
             self._last_hint = UiHint(
                 "xy",
                 x=f.x,
@@ -196,6 +223,8 @@ class SynthController:
                 value_b=depth_t,
                 display_b=f"{mod_depth:.2f}",
             )
+        else:
+            self._clear_slider_anchor()
 
 
 _NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
