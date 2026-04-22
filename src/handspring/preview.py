@@ -223,69 +223,135 @@ def _draw_mode_badge(frame: NDArray[np.uint8], mode: AppMode) -> None:
         )
 
 
+def _project_window_corners(win: Any, w: int, h: int, *, mirrored: bool) -> NDArray[np.int32]:
+    """Project a window's 4 corners through its 3D pose (depth, roll, pitch, yaw)
+    to 2D pixel coordinates. Returns (4, 2) int array: TL, TR, BR, BL."""
+    cx = win.x + win.width / 2.0
+    cy = win.y + win.height / 2.0
+    hw = win.width / 2.0
+    hh = win.height / 2.0
+    # Local corner offsets (TL, TR, BR, BL) before rotation — (x, y, z=0).
+    local = np.array(
+        [
+            [-hw, -hh, 0.0],
+            [+hw, -hh, 0.0],
+            [+hw, +hh, 0.0],
+            [-hw, +hh, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    # Rotation matrices. Intrinsic Z (roll) → X (pitch) → Y (yaw).
+    cr, sr = np.cos(win.roll), np.sin(win.roll)
+    cp, sp = np.cos(win.pitch), np.sin(win.pitch)
+    cy_, sy_ = np.cos(win.yaw), np.sin(win.yaw)
+    r_z = np.array([[cr, -sr, 0], [sr, cr, 0], [0, 0, 1]], dtype=np.float64)
+    r_x = np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]], dtype=np.float64)
+    r_y = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]], dtype=np.float64)
+    rotated = local @ r_z.T @ r_x.T @ r_y.T
+    # Perspective divide: (x, y) / (1 + z_total), where z_total = window depth
+    # + corner's rotated z.
+    focal = 1.4
+    result = np.zeros((4, 2), dtype=np.int32)
+    for i, p in enumerate(rotated):
+        denom = focal + win.depth + float(p[2])
+        if denom < 0.2:
+            denom = 0.2  # clamp to avoid flipping / singularity
+        px = cx + float(p[0]) * (focal / denom)
+        py = cy + float(p[1]) * (focal / denom)
+        if mirrored:
+            px = 1.0 - px
+        result[i] = (int(px * w), int(py * h))
+    return result
+
+
+def _quad_bbox(quad: NDArray[np.int32]) -> tuple[int, int, int, int]:
+    xs = quad[:, 0]
+    ys = quad[:, 1]
+    return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+
+
 def _draw_jarvis(frame: NDArray[np.uint8], jarvis: JarvisController, *, mirrored: bool) -> None:
     h, w = frame.shape[:2]
     overlay = frame.copy()
     alpha = 0.35
 
-    for win in jarvis.manager.windows():
-        # Translate normalized coords to pixels; apply mirror if needed.
-        x0_n = 1.0 - (win.x + win.width) if mirrored else win.x
-        x0 = int(x0_n * w)
-        y0 = int(win.y * h)
-        x1 = int((x0_n + win.width) * w)
-        y1 = int((win.y + win.height) * h)
+    # Sort windows back-to-front by effective depth (farther first) so near
+    # windows occlude far ones correctly.
+    sorted_windows = sorted(jarvis.manager.windows(), key=lambda win: -win.depth)
 
+    projected: list[tuple[Any, NDArray[np.int32]]] = []
+    for win in sorted_windows:
+        quad = _project_window_corners(win, w, h, mirrored=mirrored)
+        projected.append((win, quad))
         fill = WINDOW_COLORS[win.color_idx]
-        cv2.rectangle(overlay, (x0, y0), (x1, y1), fill, -1)
+        cv2.fillPoly(overlay, [quad], fill)
 
     # Composite overlay onto frame with alpha.
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, dst=frame)
 
-    # Borders, titles drawn on top (fully opaque).
-    for win in jarvis.manager.windows():
-        x0_n = 1.0 - (win.x + win.width) if mirrored else win.x
-        x0 = int(x0_n * w)
-        y0 = int(win.y * h)
-        x1 = int((x0_n + win.width) * w)
-        y1 = int((win.y + win.height) * h)
-
+    # Borders, titles, resize handles drawn on top (fully opaque).
+    for win, quad in projected:
         border = WINDOW_COLORS[win.color_idx]
-        cv2.rectangle(frame, (x0, y0), (x1, y1), border, 2)
-        # Title bar
-        cv2.rectangle(frame, (x0, y0), (x1, min(y0 + 22, y1)), border, -1)
+        cv2.polylines(frame, [quad], isClosed=True, color=border, thickness=2)
+        # Title bar: the top sliver of the quad (top edge → 15% down toward bottom edges).
+        tl, tr, br, bl = quad[0], quad[1], quad[2], quad[3]
+        title_t = 0.15
+        title_bl = (
+            int(tl[0] + (bl[0] - tl[0]) * title_t),
+            int(tl[1] + (bl[1] - tl[1]) * title_t),
+        )
+        title_br = (
+            int(tr[0] + (br[0] - tr[0]) * title_t),
+            int(tr[1] + (br[1] - tr[1]) * title_t),
+        )
+        title_quad = np.array([tl, tr, title_br, title_bl], dtype=np.int32)
+        cv2.fillPoly(frame, [title_quad], border)
+        # Label placed near the TL corner, no rotation — legibility > realism.
         cv2.putText(
             frame,
             f"Window {win.id}",
-            (x0 + 8, y0 + 16),
+            (int(tl[0]) + 8, int(tl[1]) + 18),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
             (20, 20, 20),
             1,
             cv2.LINE_AA,
         )
-        # Top-right corner resize handle.
+        # Top-right corner resize handle (follows projected TR corner).
         resizing_id = jarvis.resizing_window_id()
-        handle_color = (
-            (136, 255, 0) if resizing_id == win.id else (100, 200, 255)
-        )  # green when active, cyan otherwise
+        handle_color = (136, 255, 0) if resizing_id == win.id else (100, 200, 255)
         handle_size = 28 if resizing_id == win.id else 22
-        hx = x1
-        hy = y0
-        cv2.rectangle(
-            frame,
-            (hx - handle_size, hy),
-            (hx, hy + handle_size),
-            handle_color,
-            -1,
-        )
-        cv2.rectangle(
-            frame,
-            (hx - handle_size, hy),
-            (hx, hy + handle_size),
-            (30, 30, 30),
-            1,
-        )
+        hx, hy = int(tr[0]), int(tr[1])
+        cv2.rectangle(frame, (hx - handle_size, hy), (hx, hy + handle_size), handle_color, -1)
+        cv2.rectangle(frame, (hx - handle_size, hy), (hx, hy + handle_size), (30, 30, 30), 1)
+        # Depth readout on the bottom-left corner for visual debugging / feel.
+        if (
+            abs(win.depth) > 0.01
+            or abs(win.roll) > 0.05
+            or abs(win.pitch) > 0.05
+            or abs(win.yaw) > 0.05
+        ):
+            tag = f"z{win.depth:+.2f}"
+            cv2.putText(
+                frame,
+                tag,
+                (int(bl[0]) + 6, int(bl[1]) - 6),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (20, 20, 20),
+                3,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame,
+                tag,
+                (int(bl[0]) + 6, int(bl[1]) - 6),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (220, 255, 220),
+                1,
+                cv2.LINE_AA,
+            )
 
     # Destroy zone: thin red strip at the bottom. Tints brighter when a grab
     # enters it — telegraphs "release here to delete".

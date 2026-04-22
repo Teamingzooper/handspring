@@ -614,3 +614,71 @@ def test_split_fumble_no_pull_keeps_original():
     c.update(_frame(_hand("open", 0.45, 0.5), _hand("fist", 0.55, 0.5)))
     assert c.manager.get(w.id) is not None
     assert len(c.manager.windows()) == 1
+
+
+# ---------------------------------------------------------------------------
+# 3D pose: depth + rotation drive from grabbing hand
+# ---------------------------------------------------------------------------
+
+
+def _hf_pose(
+    x: float,
+    y: float,
+    z: float = 0.0,
+    roll: float = 0.0,
+    pitch: float = 0.0,
+    yaw: float = 0.0,
+) -> HandFeatures:
+    return HandFeatures(
+        x=x,
+        y=y,
+        z=z,
+        openness=1.0,
+        pinch=0.0,
+        index_x=x,
+        index_y=y,
+        thumb_x=x + 0.1,
+        thumb_y=y,
+        palm_roll=roll,
+        palm_pitch=pitch,
+        palm_yaw=yaw,
+    )
+
+
+def _hand_pose(gesture: str, features: HandFeatures) -> HandState:
+    return HandState(
+        present=True,
+        features=features,
+        gesture=gesture,  # type: ignore[arg-type]
+        motion=MotionState(False, False, 0.0, 0.0, None),
+    )
+
+
+def test_grab_translates_palm_depth_delta_to_window_depth():
+    c = JarvisController()
+    w = c.manager.create(x=0.3, y=0.3, width=0.3, height=0.3)
+    # Grab with palm z = 0.0.
+    c.update(_frame(_absent(), _hand_pose("fist", _hf_pose(0.45, 0.45, z=0.0))))
+    # Move palm toward the camera (z becomes more negative).
+    c.update(_frame(_absent(), _hand_pose("fist", _hf_pose(0.45, 0.45, z=-0.1))))
+    updated = c.manager.get(w.id)
+    assert updated is not None
+    # depth = start (0) + (-0.1 - 0) * 4 = -0.4
+    assert abs(updated.depth - (-0.4)) < 1e-6
+
+
+def test_grab_applies_palm_rotation_to_window():
+    c = JarvisController()
+    w = c.manager.create(x=0.3, y=0.3, width=0.3, height=0.3)
+    c.update(_frame(_absent(), _hand_pose("fist", _hf_pose(0.45, 0.45, roll=0.0))))
+    c.update(
+        _frame(
+            _absent(),
+            _hand_pose("fist", _hf_pose(0.45, 0.45, roll=0.5, pitch=0.2, yaw=-0.3)),
+        )
+    )
+    updated = c.manager.get(w.id)
+    assert updated is not None
+    assert abs(updated.roll - 0.5) < 1e-6
+    assert abs(updated.pitch - 0.2) < 1e-6
+    assert abs(updated.yaw - (-0.3)) < 1e-6

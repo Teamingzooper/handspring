@@ -28,6 +28,12 @@ class Window:
     height: float
     z: int  # z-order index (higher = on top)
     color_idx: int  # index into WINDOW_COLORS
+    # 3D pose. depth = signed distance from neutral plane (negative = closer
+    # to camera → appears larger). roll/pitch/yaw in radians.
+    depth: float = 0.0
+    roll: float = 0.0
+    pitch: float = 0.0
+    yaw: float = 0.0
 
     def contains(self, px: float, py: float) -> bool:
         return self.x <= px <= self.x + self.width and self.y <= py <= self.y + self.height
@@ -103,6 +109,20 @@ class WindowManager:
     def destroy(self, window_id: int) -> None:
         self._windows = [w for w in self._windows if w.id != window_id]
 
+    def set_pose(
+        self,
+        window_id: int,
+        *,
+        depth: float,
+        roll: float,
+        pitch: float,
+        yaw: float,
+    ) -> None:
+        w = self.get(window_id)
+        if w is None:
+            return
+        self._replace(replace(w, depth=depth, roll=roll, pitch=pitch, yaw=yaw))
+
     def _replace(self, new_w: Window) -> None:
         for i, w in enumerate(self._windows):
             if w.id == new_w.id:
@@ -138,6 +158,16 @@ class _GrabState:
     side: Side
     last_palm_x: float
     last_palm_y: float
+    # Pose snapshots at grab start (palm and window). Deltas from these drive
+    # the window's 3D pose.
+    start_palm_z: float
+    start_palm_roll: float
+    start_palm_pitch: float
+    start_palm_yaw: float
+    start_win_depth: float
+    start_win_roll: float
+    start_win_pitch: float
+    start_win_yaw: float
 
 
 @dataclass
@@ -378,11 +408,20 @@ class JarvisController:
                 if target is None:
                     continue
                 self.manager.promote(target.id)
+                f = state.features
                 self._grab = _GrabState(
                     window_id=target.id,
                     side=side,  # type: ignore[arg-type]
-                    last_palm_x=state.features.x,
-                    last_palm_y=state.features.y,
+                    last_palm_x=f.x,
+                    last_palm_y=f.y,
+                    start_palm_z=f.z,
+                    start_palm_roll=f.palm_roll,
+                    start_palm_pitch=f.palm_pitch,
+                    start_palm_yaw=f.palm_yaw,
+                    start_win_depth=target.depth,
+                    start_win_roll=target.roll,
+                    start_win_pitch=target.pitch,
+                    start_win_yaw=target.yaw,
                 )
                 return
             return
@@ -397,15 +436,24 @@ class JarvisController:
                 self._events_out.append(("destroyed", grab.window_id))
             self._grab = None
             return
-        dx = state.features.x - grab.last_palm_x
-        dy = state.features.y - grab.last_palm_y
+        f = state.features
+        dx = f.x - grab.last_palm_x
+        dy = f.y - grab.last_palm_y
         self.manager.move(grab.window_id, dx=dx, dy=dy)
-        self._grab = _GrabState(
-            window_id=grab.window_id,
-            side=grab.side,
-            last_palm_x=state.features.x,
-            last_palm_y=state.features.y,
+        # 3D pose deltas from grab-start snapshot. MediaPipe z is small; scale up.
+        new_depth = grab.start_win_depth + (f.z - grab.start_palm_z) * 4.0
+        new_depth = _clamp(new_depth, -0.8, 2.5)
+        new_roll = grab.start_win_roll + (f.palm_roll - grab.start_palm_roll)
+        new_pitch = grab.start_win_pitch + (f.palm_pitch - grab.start_palm_pitch)
+        new_yaw = grab.start_win_yaw + (f.palm_yaw - grab.start_palm_yaw)
+        self.manager.set_pose(
+            grab.window_id,
+            depth=new_depth,
+            roll=new_roll,
+            pitch=new_pitch,
+            yaw=new_yaw,
         )
+        self._grab = replace(grab, last_palm_x=f.x, last_palm_y=f.y)
 
     def grabbed_window_id(self) -> int | None:
         return self._grab.window_id if self._grab is not None else None

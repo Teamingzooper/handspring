@@ -82,6 +82,31 @@ def hand_features(landmarks: NDArray[np.floating[Any]]) -> HandFeatures:
     thumb_x = float(np.clip(landmarks[THUMB_TIP][0], 0.0, 1.0))
     thumb_y = float(np.clip(landmarks[THUMB_TIP][1], 0.0, 1.0))
 
+    # Palm orientation (radians).
+    # Roll: angle of wrist→middle-MCP vector in the image plane. atan2 arg
+    # order chosen so that 0 ≈ palm pointing up (fingers toward top of frame).
+    palm_dy = palm[1] - wrist[1]
+    palm_dx = palm[0] - wrist[0]
+    palm_roll = float(np.arctan2(palm_dx, -palm_dy))  # 0 when palm points up
+    # Pitch: z-component of wrist→middle-MCP normalized by total palm length.
+    palm_len = float(np.linalg.norm(palm - wrist))
+    if palm_len < 1e-6:
+        palm_pitch = 0.0
+    else:
+        dz = float(palm[2] - wrist[2])
+        palm_pitch = float(np.arcsin(np.clip(-dz / palm_len, -1.0, 1.0)))
+    # Yaw: z-difference of index-MCP vs pinky-MCP relative to their 2D distance.
+    imcp = landmarks[INDEX_MCP]
+    pmcp = landmarks[PINKY_MCP]
+    knuckle_dx = float(imcp[0] - pmcp[0])
+    knuckle_dy = float(imcp[1] - pmcp[1])
+    knuckle_span = float(np.sqrt(knuckle_dx * knuckle_dx + knuckle_dy * knuckle_dy))
+    if knuckle_span < 1e-6:
+        palm_yaw = 0.0
+    else:
+        knuckle_dz = float(imcp[2] - pmcp[2])
+        palm_yaw = float(np.arcsin(np.clip(knuckle_dz / knuckle_span, -1.0, 1.0)))
+
     return HandFeatures(
         x=x,
         y=y,
@@ -92,6 +117,9 @@ def hand_features(landmarks: NDArray[np.floating[Any]]) -> HandFeatures:
         index_y=index_y,
         thumb_x=thumb_x,
         thumb_y=thumb_y,
+        palm_roll=palm_roll,
+        palm_pitch=palm_pitch,
+        palm_yaw=palm_yaw,
     )
 
 
