@@ -83,29 +83,33 @@ def hand_features(landmarks: NDArray[np.floating[Any]]) -> HandFeatures:
     thumb_y = float(np.clip(landmarks[THUMB_TIP][1], 0.0, 1.0))
 
     # Palm orientation (radians).
-    # Roll: angle of wrist→middle-MCP vector in the image plane. atan2 arg
-    # order chosen so that 0 ≈ palm pointing up (fingers toward top of frame).
+    # Roll: angle of wrist→middle-MCP vector in the image plane (0 = palm points up).
     palm_dy = palm[1] - wrist[1]
     palm_dx = palm[0] - wrist[0]
-    palm_roll = float(np.arctan2(palm_dx, -palm_dy))  # 0 when palm points up
-    # Pitch: z-component of wrist→middle-MCP normalized by total palm length.
-    palm_len = float(np.linalg.norm(palm - wrist))
-    if palm_len < 1e-6:
-        palm_pitch = 0.0
-    else:
-        dz = float(palm[2] - wrist[2])
-        palm_pitch = float(np.arcsin(np.clip(-dz / palm_len, -1.0, 1.0)))
-    # Yaw: z-difference of index-MCP vs pinky-MCP relative to their 2D distance.
+    palm_roll = float(np.arctan2(palm_dx, -palm_dy))
+    # Pitch/Yaw: compute palm-plane normal via cross product of two in-palm
+    # vectors. Force the normal to point toward camera (-z) so the sign is
+    # consistent for both left and right hands regardless of landmark ordering.
     imcp = landmarks[INDEX_MCP]
     pmcp = landmarks[PINKY_MCP]
-    knuckle_dx = float(imcp[0] - pmcp[0])
-    knuckle_dy = float(imcp[1] - pmcp[1])
-    knuckle_span = float(np.sqrt(knuckle_dx * knuckle_dx + knuckle_dy * knuckle_dy))
-    if knuckle_span < 1e-6:
+    v1 = imcp - wrist
+    v2 = pmcp - wrist
+    n = np.cross(v1, v2)
+    if n[2] > 0:
+        n = -n  # ensure normal points toward camera
+    n_len = float(np.linalg.norm(n))
+    if n_len < 1e-6:
+        palm_pitch = 0.0
         palm_yaw = 0.0
     else:
-        knuckle_dz = float(imcp[2] - pmcp[2])
-        palm_yaw = float(np.arcsin(np.clip(knuckle_dz / knuckle_span, -1.0, 1.0)))
+        nx, ny, nz = float(n[0] / n_len), float(n[1] / n_len), float(n[2] / n_len)
+        # 0 when palm faces camera; positive yaw = palm rotated right; positive
+        # pitch = palm tilted up (image y is down, so we negate ny).
+        palm_yaw = float(np.arctan2(nx, -nz))
+        palm_pitch = float(np.arctan2(-ny, -nz))
+    # 2D palm span (wrist → middle-MCP), used as a depth proxy. Normalized by
+    # the image diagonal is implicit since MediaPipe x/y are already 0..1.
+    palm_span_2d = float(np.sqrt((palm[0] - wrist[0]) ** 2 + (palm[1] - wrist[1]) ** 2))
 
     return HandFeatures(
         x=x,
@@ -120,6 +124,7 @@ def hand_features(landmarks: NDArray[np.floating[Any]]) -> HandFeatures:
         palm_roll=palm_roll,
         palm_pitch=palm_pitch,
         palm_yaw=palm_yaw,
+        palm_span=palm_span_2d,
     )
 
 

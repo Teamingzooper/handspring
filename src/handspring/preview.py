@@ -10,7 +10,12 @@ import numpy as np
 from numpy.typing import NDArray
 
 from handspring.app_mode import AppMode
-from handspring.jarvis import WINDOW_COLORS, JarvisController
+from handspring.jarvis import (
+    WINDOW_COLORS,
+    JarvisController,
+    bbox_top_right,
+    project_window_corners,
+)
 from handspring.synth_params import SynthSnapshot
 from handspring.synth_ui import UiHint
 from handspring.types import FrameResult
@@ -223,51 +228,13 @@ def _draw_mode_badge(frame: NDArray[np.uint8], mode: AppMode) -> None:
         )
 
 
-def _project_window_corners(win: Any, w: int, h: int, *, mirrored: bool) -> NDArray[np.int32]:
-    """Project a window's 4 corners through its 3D pose (depth, roll, pitch, yaw)
-    to 2D pixel coordinates. Returns (4, 2) int array: TL, TR, BR, BL."""
-    cx = win.x + win.width / 2.0
-    cy = win.y + win.height / 2.0
-    hw = win.width / 2.0
-    hh = win.height / 2.0
-    # Local corner offsets (TL, TR, BR, BL) before rotation — (x, y, z=0).
-    local = np.array(
-        [
-            [-hw, -hh, 0.0],
-            [+hw, -hh, 0.0],
-            [+hw, +hh, 0.0],
-            [-hw, +hh, 0.0],
-        ],
-        dtype=np.float64,
-    )
-    # Rotation matrices. Intrinsic Z (roll) → X (pitch) → Y (yaw).
-    cr, sr = np.cos(win.roll), np.sin(win.roll)
-    cp, sp = np.cos(win.pitch), np.sin(win.pitch)
-    cy_, sy_ = np.cos(win.yaw), np.sin(win.yaw)
-    r_z = np.array([[cr, -sr, 0], [sr, cr, 0], [0, 0, 1]], dtype=np.float64)
-    r_x = np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]], dtype=np.float64)
-    r_y = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]], dtype=np.float64)
-    rotated = local @ r_z.T @ r_x.T @ r_y.T
-    # Perspective divide: (x, y) / (1 + z_total), where z_total = window depth
-    # + corner's rotated z.
-    focal = 1.4
-    result = np.zeros((4, 2), dtype=np.int32)
-    for i, p in enumerate(rotated):
-        denom = focal + win.depth + float(p[2])
-        if denom < 0.2:
-            denom = 0.2  # clamp to avoid flipping / singularity
-        px = cx + float(p[0]) * (focal / denom)
-        py = cy + float(p[1]) * (focal / denom)
-        if mirrored:
-            px = 1.0 - px
-        result[i] = (int(px * w), int(py * h))
-    return result
-
-
-def _quad_bbox(quad: NDArray[np.int32]) -> tuple[int, int, int, int]:
-    xs = quad[:, 0]
-    ys = quad[:, 1]
-    return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+def _project_to_pixels(win: Any, w: int, h: int, *, mirrored: bool) -> NDArray[np.int32]:
+    """Wrap project_window_corners to return pixel-space int coords."""
+    corners = project_window_corners(win, mirrored=mirrored)
+    pix = np.zeros((4, 2), dtype=np.int32)
+    for i in range(4):
+        pix[i] = (int(corners[i, 0] * w), int(corners[i, 1] * h))
+    return pix
 
 
 def _draw_jarvis(frame: NDArray[np.uint8], jarvis: JarvisController, *, mirrored: bool) -> None:
@@ -281,7 +248,7 @@ def _draw_jarvis(frame: NDArray[np.uint8], jarvis: JarvisController, *, mirrored
 
     projected: list[tuple[Any, NDArray[np.int32]]] = []
     for win in sorted_windows:
-        quad = _project_window_corners(win, w, h, mirrored=mirrored)
+        quad = _project_to_pixels(win, w, h, mirrored=mirrored)
         projected.append((win, quad))
         fill = WINDOW_COLORS[win.color_idx]
         cv2.fillPoly(overlay, [quad], fill)
@@ -317,11 +284,14 @@ def _draw_jarvis(frame: NDArray[np.uint8], jarvis: JarvisController, *, mirrored
             1,
             cv2.LINE_AA,
         )
-        # Top-right corner resize handle (follows projected TR corner).
+        # Resize handle locked to the axis-aligned bbox TOP-RIGHT of the
+        # projected quad. Stable regardless of rotation — always readable.
         resizing_id = jarvis.resizing_window_id()
         handle_color = (136, 255, 0) if resizing_id == win.id else (100, 200, 255)
         handle_size = 28 if resizing_id == win.id else 22
-        hx, hy = int(tr[0]), int(tr[1])
+        corners_screen = project_window_corners(win, mirrored=mirrored)
+        hsx, hsy = bbox_top_right(corners_screen)
+        hx, hy = int(hsx * w), int(hsy * h)
         cv2.rectangle(frame, (hx - handle_size, hy), (hx, hy + handle_size), handle_color, -1)
         cv2.rectangle(frame, (hx - handle_size, hy), (hx, hy + handle_size), (30, 30, 30), 1)
         # Depth readout on the bottom-left corner for visual debugging / feel.

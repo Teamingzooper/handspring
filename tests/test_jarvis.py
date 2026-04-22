@@ -628,6 +628,7 @@ def _hf_pose(
     roll: float = 0.0,
     pitch: float = 0.0,
     yaw: float = 0.0,
+    span: float = 0.1,
 ) -> HandFeatures:
     return HandFeatures(
         x=x,
@@ -642,6 +643,7 @@ def _hf_pose(
         palm_roll=roll,
         palm_pitch=pitch,
         palm_yaw=yaw,
+        palm_span=span,
     )
 
 
@@ -654,17 +656,17 @@ def _hand_pose(gesture: str, features: HandFeatures) -> HandState:
     )
 
 
-def test_grab_translates_palm_depth_delta_to_window_depth():
+def test_grab_palm_span_ratio_drives_window_depth():
     c = JarvisController()
     w = c.manager.create(x=0.3, y=0.3, width=0.3, height=0.3)
-    # Grab with palm z = 0.0.
-    c.update(_frame(_absent(), _hand_pose("fist", _hf_pose(0.45, 0.45, z=0.0))))
-    # Move palm toward the camera (z becomes more negative).
-    c.update(_frame(_absent(), _hand_pose("fist", _hf_pose(0.45, 0.45, z=-0.1))))
+    # Grab with palm span 0.1.
+    c.update(_frame(_absent(), _hand_pose("fist", _hf_pose(0.45, 0.45, span=0.1))))
+    # Hand doubles in apparent size → moved closer to camera.
+    c.update(_frame(_absent(), _hand_pose("fist", _hf_pose(0.45, 0.45, span=0.2))))
     updated = c.manager.get(w.id)
     assert updated is not None
-    # depth = start (0) + (-0.1 - 0) * 4 = -0.4
-    assert abs(updated.depth - (-0.4)) < 1e-6
+    # scale = 2 → depth = 0 + focal*(1/2 - 1) = -0.7 (focal=1.4).
+    assert abs(updated.depth - (-0.7)) < 1e-6
 
 
 def test_grab_applies_palm_rotation_to_window():

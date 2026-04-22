@@ -46,6 +46,9 @@ class HandFeatures:
     palm_roll: float = 0.0
     palm_pitch: float = 0.0
     palm_yaw: float = 0.0
+    # 2D wrist→middle-MCP distance in the image plane. A robust proxy for
+    # how close the hand is to the camera (closer hand → bigger span).
+    palm_span: float = 0.0
 
 
 @dataclass(frozen=True)
