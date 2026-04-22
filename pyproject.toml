@@ -1,6 +1,6 @@
 [project]
 name = "handspring"
-version = "0.9.7"
+version = "0.9.8"
 description = "Webcam gesture → OSC stream for creative coding"
 readme = "README.md"
 license = { text = "MIT" }

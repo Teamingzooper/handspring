@@ -173,18 +173,18 @@ if _AVAILABLE:
         progress: float,
         root_items: tuple[tuple[str, tuple[str, ...]], ...],
     ) -> None:
-        r_inner = 18.0  # center dead-zone visual
-        r_root = 110.0  # outer radius of root ring
-        r_sub_inner = 120.0  # gap between root and sub
-        r_sub = 210.0  # outer radius of sub ring
+        r_inner = 40.0  # center dead-zone visual
+        r_root = 220.0  # outer radius of root ring
+        r_sub_inner = 235.0  # gap between root and sub
+        r_sub = 410.0  # outer radius of sub ring
 
         # During the hold countdown, show ONLY a thin filling arc — no slices.
         if progress < 1.0:
             Quartz.CGContextSetRGBStrokeColor(ctx, 0.75, 0.75, 0.75, 0.9)
-            Quartz.CGContextSetLineWidth(ctx, 5.0)
+            Quartz.CGContextSetLineWidth(ctx, 8.0)
             end_radians = -math.pi / 2 + 2 * math.pi * progress
             Quartz.CGContextBeginPath(ctx)
-            Quartz.CGContextAddArc(ctx, ox, oy, 30.0, -math.pi / 2, end_radians, False)
+            Quartz.CGContextAddArc(ctx, ox, oy, 60.0, -math.pi / 2, end_radians, False)
             Quartz.CGContextStrokePath(ctx)
             return
 
@@ -275,9 +275,9 @@ if _AVAILABLE:
 
     def _draw_label(text: str, cx: float, cy: float, color: Any, bold: bool) -> None:
         attrs = {
-            AppKit.NSFontAttributeName: AppKit.NSFont.boldSystemFontOfSize_(13)
+            AppKit.NSFontAttributeName: AppKit.NSFont.boldSystemFontOfSize_(18)
             if bold
-            else AppKit.NSFont.systemFontOfSize_(13),
+            else AppKit.NSFont.systemFontOfSize_(16),
             AppKit.NSForegroundColorAttributeName: color,
         }
         ns = Foundation.NSString.stringWithString_(text)
