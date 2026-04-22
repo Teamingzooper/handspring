@@ -52,6 +52,14 @@ class TrackerConfig:
     min_tracking_confidence: float = 0.5
 
 
+@dataclass
+class TrackerOutput:
+    frame: FrameResult
+    hand_landmark_lists: list[Any]  # list of mediapipe NormalizedLandmarkList
+    face_landmark_lists: list[Any]  # list of mediapipe NormalizedLandmarkList (0 or 1)
+    pose_landmarks: Any | None  # mediapipe landmark_pb2.NormalizedLandmarkList | None
+
+
 class Tracker:
     def __init__(self, config: TrackerConfig | None = None) -> None:
         self._config = config or TrackerConfig()
@@ -94,7 +102,7 @@ class Tracker:
         self._last_frame_time: float | None = None
         self._fps_ema: float = 0.0
 
-    def process(self, bgr_frame: NDArray[np.uint8]) -> FrameResult:
+    def process(self, bgr_frame: NDArray[np.uint8]) -> TrackerOutput:
         rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
         rgb.flags.writeable = False
 
@@ -130,13 +138,29 @@ class Tracker:
                 fps = self._fps_ema
         self._last_frame_time = now
 
-        return FrameResult(
+        raw_hands = (
+            list(hand_results.multi_hand_landmarks) if hand_results.multi_hand_landmarks else []
+        )
+        raw_faces = (
+            list(face_result.multi_face_landmarks)
+            if face_result is not None and face_result.multi_face_landmarks
+            else []
+        )
+        raw_pose = pose_result.pose_landmarks if pose_result is not None else None
+
+        frame_result = FrameResult(
             left=left_state,
             right=right_state,
             face=face_state,
             pose=pose_state,
             fps=fps,
             clap_event=clap_event,
+        )
+        return TrackerOutput(
+            frame=frame_result,
+            hand_landmark_lists=raw_hands,
+            face_landmark_lists=raw_faces,
+            pose_landmarks=raw_pose,
         )
 
     def close(self) -> None:

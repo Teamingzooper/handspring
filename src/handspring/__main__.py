@@ -7,7 +7,6 @@ import signal
 import sys
 import time
 from types import FrameType
-from typing import Any
 
 import cv2
 import numpy as np
@@ -131,7 +130,8 @@ def main(argv: list[str] | None = None) -> int:
                 time.sleep(0.01)
                 continue
             bgr: NDArray[np.uint8] = bgr_raw  # type: ignore[assignment]
-            result = tracker.process(bgr)
+            tracker_output = tracker.process(bgr)
+            result = tracker_output.frame
             emitter.emit(result)
             synth_controller.update(result)
             now = time.monotonic()
@@ -161,16 +161,13 @@ def main(argv: list[str] | None = None) -> int:
                 emitter.emit_synth(synth_params.snapshot())
 
             if preview is not None:
-                hand_landmarks, face_landmarks, pose_landmarks = _extract_landmark_lists(
-                    tracker, bgr
-                )
                 snap_for_preview = synth_params.snapshot() if not args.no_synth else None
                 hint_for_preview = synth_controller.ui_hint() if not args.no_synth else None
                 if not preview.render(
                     bgr,
-                    hand_landmarks,
-                    face_landmarks,
-                    pose_landmarks,
+                    tracker_output.hand_landmark_lists,
+                    tracker_output.face_landmark_lists,
+                    tracker_output.pose_landmarks,
                     result,
                     f"{args.host}:{args.port}",
                     snap_for_preview,
@@ -194,26 +191,6 @@ def main(argv: list[str] | None = None) -> int:
     # Newline after the \r-based status line so the shell prompt lands cleanly.
     print()
     return 0
-
-
-def _extract_landmark_lists(
-    tracker: Tracker, bgr: NDArray[np.uint8]
-) -> tuple[list[Any], list[Any], Any | None]:
-    """Re-run the underlying MediaPipe solvers so the preview sees the same
-    landmark lists the tracker used."""
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    rgb.flags.writeable = False
-    hand_results = tracker._hands.process(rgb)  # noqa: SLF001
-    face_results = (
-        tracker._face_mesh.process(rgb) if tracker._face_mesh is not None else None  # noqa: SLF001
-    )
-    pose_results = (
-        tracker._pose.process(rgb) if tracker._pose is not None else None  # noqa: SLF001
-    )
-    hand_lists = list(hand_results.multi_hand_landmarks or [])
-    face_lists = list(face_results.multi_face_landmarks or []) if face_results is not None else []
-    pose_landmarks = pose_results.pose_landmarks if pose_results is not None else None
-    return hand_lists, face_lists, pose_landmarks
 
 
 def _print_status(result: FrameResult) -> None:
