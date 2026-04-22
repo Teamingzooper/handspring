@@ -249,3 +249,65 @@ def test_point_no_tap_if_moves_away_early():
     unchanged = c.manager.get(w.id)
     assert unchanged is not None
     assert unchanged.color_idx == w.color_idx
+
+
+def test_pending_rect_none_when_not_creating():
+    c = JarvisController()
+    c.update(_frame(_absent(), _absent()))
+    assert c.pending_rect() is None
+
+
+def test_pending_rect_tracks_while_creating():
+    c = JarvisController()
+    c.update(
+        _frame(
+            _hand("open", 0.48, 0.5, pinch=0.95),
+            _hand("open", 0.52, 0.5, pinch=0.95),
+        )
+    )
+    rect1 = c.pending_rect()
+    assert rect1 is not None
+    x, y, w, h = rect1
+    # Initial bounds: x=0.48..0.52, y=0.5..0.5 → narrow
+    assert abs(x - 0.48) < 1e-6
+    assert abs(w - 0.04) < 1e-6
+    # Move apart.
+    c.update(
+        _frame(
+            _hand("open", 0.20, 0.30, pinch=0.95),
+            _hand("open", 0.80, 0.70, pinch=0.95),
+        )
+    )
+    rect2 = c.pending_rect()
+    assert rect2 is not None
+    x2, y2, w2, h2 = rect2
+    assert abs(x2 - 0.20) < 1e-6
+    assert abs(y2 - 0.30) < 1e-6
+    assert abs(w2 - 0.60) < 1e-6
+    assert abs(h2 - 0.40) < 1e-6
+
+
+def test_pending_rect_clears_after_release():
+    c = JarvisController()
+    c.update(
+        _frame(
+            _hand("open", 0.48, 0.5, pinch=0.95),
+            _hand("open", 0.52, 0.5, pinch=0.95),
+        )
+    )
+    c.update(
+        _frame(
+            _hand("open", 0.20, 0.30, pinch=0.95),
+            _hand("open", 0.80, 0.70, pinch=0.95),
+        )
+    )
+    # Release left pinch — commit.
+    c.update(
+        _frame(
+            _hand("open", 0.20, 0.30, pinch=0.2),
+            _hand("open", 0.80, 0.70, pinch=0.95),
+        )
+    )
+    assert c.pending_rect() is None
+    # And a window was committed.
+    assert len(c.manager.windows()) == 1

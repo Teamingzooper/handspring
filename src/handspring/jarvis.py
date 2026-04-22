@@ -130,6 +130,8 @@ class _GrabState:
 class _CreateState:
     start_left: tuple[float, float]
     start_right: tuple[float, float]
+    current_left: tuple[float, float]
+    current_right: tuple[float, float]
 
 
 class JarvisController:
@@ -181,45 +183,60 @@ class JarvisController:
         left = frame.left
         right = frame.right
         both_pinching = is_pinching(left) and is_pinching(right)
+
         if self._create is None:
-            # Entry requires both pinching AND index tips close together.
             if both_pinching and left.features is not None and right.features is not None:
                 dx = left.features.index_x - right.features.index_x
                 dy = left.features.index_y - right.features.index_y
                 distance = (dx * dx + dy * dy) ** 0.5
                 if distance < _CREATE_ENTRY_DISTANCE:
+                    lp = (left.features.index_x, left.features.index_y)
+                    rp = (right.features.index_x, right.features.index_y)
                     self._create = _CreateState(
-                        start_left=(left.features.index_x, left.features.index_y),
-                        start_right=(right.features.index_x, right.features.index_y),
+                        start_left=lp,
+                        start_right=rp,
+                        current_left=lp,
+                        current_right=rp,
                     )
             return
 
         # Already creating.
         if both_pinching and left.features is not None and right.features is not None:
-            # Still in the gesture — do nothing (preview rendering reads
-            # `_create` + current frame to draw live preview rectangle; see
-            # WindowManager.preview_rect below).
+            self._create = replace(
+                self._create,
+                current_left=(left.features.index_x, left.features.index_y),
+                current_right=(right.features.index_x, right.features.index_y),
+            )
             return
 
-        # Released — commit with current (at-release) index tip positions.
-        if left.features is not None and right.features is not None:
-            x1, y1 = left.features.index_x, left.features.index_y
-            x2, y2 = right.features.index_x, right.features.index_y
-            x_min, x_max = min(x1, x2), max(x1, x2)
-            y_min, y_max = min(y1, y2), max(y1, y2)
-            w = x_max - x_min
-            h = y_max - y_min
-            diag = (w * w + h * h) ** 0.5
-            if diag >= _MIN_WINDOW_DIAGONAL:
-                if w > 0 and h > 0:
-                    ar = w / h
-                    if ar < 0.5:
-                        h = w / 0.5
-                    elif ar > 2.0:
-                        h = w / 2.0
-                created = self.manager.create(x=x_min, y=y_min, width=w, height=h)
-                self._events_out.append(("created", created.id))
+        # Released — commit with the last-tracked positions.
+        x1, y1 = self._create.current_left
+        x2, y2 = self._create.current_right
+        x_min, x_max = min(x1, x2), max(x1, x2)
+        y_min, y_max = min(y1, y2), max(y1, y2)
+        w = x_max - x_min
+        h = y_max - y_min
+        diag = (w * w + h * h) ** 0.5
+        if diag >= _MIN_WINDOW_DIAGONAL:
+            if w > 0 and h > 0:
+                ar = w / h
+                if ar < 0.5:
+                    h = w / 0.5
+                elif ar > 2.0:
+                    h = w / 2.0
+            created = self.manager.create(x=x_min, y=y_min, width=w, height=h)
+            self._events_out.append(("created", created.id))
         self._create = None
+
+    def pending_rect(self) -> tuple[float, float, float, float] | None:
+        """Return (x, y, width, height) of the in-progress window preview, or None."""
+        if self._create is None:
+            return None
+        x1, y1 = self._create.current_left
+        x2, y2 = self._create.current_right
+        x_min, x_max = min(x1, x2), max(x1, x2)
+        y_min, y_max = min(y1, y2), max(y1, y2)
+        return x_min, y_min, x_max - x_min, y_max - y_min
 
     # ---- 2. Grab/drag: open → fist while palm is over a window ----
 
