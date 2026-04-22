@@ -146,8 +146,9 @@ class _ResizeState:
 
 
 class JarvisController:
-    def __init__(self) -> None:
+    def __init__(self, *, mirrored: bool = False) -> None:
         self.manager = WindowManager()
+        self._mirrored = mirrored
         self._grab: _GrabState | None = None
         self._create: _CreateState | None = None
         self._resize: _ResizeState | None = None
@@ -201,26 +202,32 @@ class JarvisController:
                 self._resize = None
                 return False
             f = side_state.features
-            # New top-right corner = pinch's index tip.
-            new_right = f.index_x
             new_top = f.index_y
-            # Enforce minimum size.
-            min_right = self._resize.anchor_x + _MIN_RESIZE_SIZE
             max_top = self._resize.anchor_bottom_y - _MIN_RESIZE_SIZE
-            if new_right < min_right:
-                new_right = min_right
             if new_top > max_top:
                 new_top = max_top
-            # Compute new window geometry (clamp to minimum after applying corner clamps).
-            new_width = max(new_right - self._resize.anchor_x, _MIN_RESIZE_SIZE)
             new_height = max(self._resize.anchor_bottom_y - new_top, _MIN_RESIZE_SIZE)
+            if self._mirrored:
+                # Dragged corner is the raw TOP-LEFT; anchor is raw top-right.
+                new_left = f.index_x
+                max_left = self._resize.anchor_x - _MIN_RESIZE_SIZE
+                if new_left > max_left:
+                    new_left = max_left
+                new_x = new_left
+                new_width = max(self._resize.anchor_x - new_left, _MIN_RESIZE_SIZE)
+            else:
+                # Dragged corner is raw TOP-RIGHT; anchor is raw top-left.
+                new_right = f.index_x
+                min_right = self._resize.anchor_x + _MIN_RESIZE_SIZE
+                if new_right < min_right:
+                    new_right = min_right
+                new_x = self._resize.anchor_x
+                new_width = max(new_right - self._resize.anchor_x, _MIN_RESIZE_SIZE)
             w = self.manager.get(self._resize.window_id)
             if w is not None:
                 # Direct replacement (can't use move — that's translation-only).
                 self.manager._replace(
-                    replace(
-                        w, x=self._resize.anchor_x, y=new_top, width=new_width, height=new_height
-                    )
+                    replace(w, x=new_x, y=new_top, width=new_width, height=new_height)
                 )
             return True
 
@@ -238,7 +245,10 @@ class JarvisController:
             best: tuple[int, float] | None = None  # (z, window_id)
             target_window = None
             for w in self.manager.windows():
-                corner_x = w.x + w.width
+                # When the preview is mirrored, the handle visually drawn at the
+                # display's top-right corresponds to the raw top-LEFT of the window
+                # (because cv2.flip mirrors the image but features stay in raw coords).
+                corner_x = w.x if self._mirrored else w.x + w.width
                 corner_y = w.y
                 dx = fx - corner_x
                 dy = fy - corner_y
@@ -247,10 +257,17 @@ class JarvisController:
                     target_window = w
             if target_window is not None:
                 self.manager.promote(target_window.id)
+                # Anchor the OPPOSITE corner from the one being dragged.
+                # Mirrored: user drags raw top-left, so the raw bottom-RIGHT stays put.
+                # Non-mirrored: user drags raw top-right, raw bottom-LEFT stays put.
+                if self._mirrored:
+                    anchor_x = target_window.x + target_window.width
+                else:
+                    anchor_x = target_window.x
                 self._resize = _ResizeState(
                     window_id=target_window.id,
                     side=side,  # type: ignore[arg-type]
-                    anchor_x=target_window.x,
+                    anchor_x=anchor_x,
                     anchor_bottom_y=target_window.y + target_window.height,
                 )
                 return True

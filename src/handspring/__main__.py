@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
             synth_params.set_volume(last_user_volume["v"])
 
     app_mode_controller = AppModeController(on_change=_on_app_mode_change)
-    jarvis = JarvisController()
+    jarvis = JarvisController(mirrored=args.mirror)
 
     synth: Synth | None = None
     if not args.no_synth:
