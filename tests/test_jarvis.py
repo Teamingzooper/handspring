@@ -141,23 +141,23 @@ def test_pinch_fingertips_together_then_pull_creates_window():
     # x positions 0.48 and 0.52 → distance 0.04 < 0.08.
     c.update(
         _frame(
-            _hand("fist", 0.48, 0.5, pinch=0.95),
-            _hand("fist", 0.52, 0.5, pinch=0.95),
+            _hand("open", 0.48, 0.5, pinch=0.95),
+            _hand("open", 0.52, 0.5, pinch=0.95),
         )
     )
     assert c.manager.windows() == []  # still in creation gesture
     # Pull apart — hands move to 0.25 and 0.75.
     c.update(
         _frame(
-            _hand("fist", 0.25, 0.35, pinch=0.95),
-            _hand("fist", 0.75, 0.65, pinch=0.95),
+            _hand("open", 0.25, 0.35, pinch=0.95),
+            _hand("open", 0.75, 0.65, pinch=0.95),
         )
     )
     # Release left pinch → commit.
     c.update(
         _frame(
-            _hand("fist", 0.25, 0.35, pinch=0.2),
-            _hand("fist", 0.75, 0.65, pinch=0.95),
+            _hand("open", 0.25, 0.35, pinch=0.2),
+            _hand("open", 0.75, 0.65, pinch=0.95),
         )
     )
     assert len(c.manager.windows()) == 1
@@ -175,15 +175,15 @@ def test_no_create_if_fingertips_far_apart_at_pinch_start():
     # Both pinching but hands far apart from the start.
     c.update(
         _frame(
-            _hand("fist", 0.2, 0.5, pinch=0.95),
-            _hand("fist", 0.8, 0.5, pinch=0.95),
+            _hand("open", 0.2, 0.5, pinch=0.95),
+            _hand("open", 0.8, 0.5, pinch=0.95),
         )
     )
     # Release — should NOT commit (was never in create state).
     c.update(
         _frame(
-            _hand("fist", 0.2, 0.5, pinch=0.2),
-            _hand("fist", 0.8, 0.5, pinch=0.2),
+            _hand("open", 0.2, 0.5, pinch=0.2),
+            _hand("open", 0.8, 0.5, pinch=0.2),
         )
     )
     assert c.manager.windows() == []
@@ -194,15 +194,15 @@ def test_tiny_pull_still_discarded():
     c = JarvisController()
     c.update(
         _frame(
-            _hand("fist", 0.495, 0.5, pinch=0.95),
-            _hand("fist", 0.505, 0.5, pinch=0.95),
+            _hand("open", 0.495, 0.5, pinch=0.95),
+            _hand("open", 0.505, 0.5, pinch=0.95),
         )
     )
     # Release without pulling apart.
     c.update(
         _frame(
-            _hand("fist", 0.495, 0.5, pinch=0.2),
-            _hand("fist", 0.505, 0.5, pinch=0.95),
+            _hand("open", 0.495, 0.5, pinch=0.2),
+            _hand("open", 0.505, 0.5, pinch=0.95),
         )
     )
     assert c.manager.windows() == []

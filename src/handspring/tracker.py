@@ -169,7 +169,7 @@ class Tracker:
                 history = self._left_history if side == "left" else self._right_history
                 detector = self._left_motion if side == "left" else self._right_motion
                 history.push(feats, now)
-                m = detector.update(history, now)
+                m = detector.update(history, now, gesture=gesture)
                 motion = MotionState(
                     pinching=m.pinching,
                     dragging=m.dragging,

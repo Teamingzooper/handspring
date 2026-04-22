@@ -134,3 +134,18 @@ def face_features(landmarks: NDArray[np.floating[Any]]) -> FaceFeatures:
     mouth_open = float(np.clip((vertical / mouth_width) * 2.2, 0.0, 1.0))
 
     return FaceFeatures(yaw=yaw, pitch=pitch, mouth_open=mouth_open)
+
+
+from handspring.types import HandState  # noqa: E402
+
+
+def is_pinching(state: HandState) -> bool:
+    """A hand is "actively pinching" when it's present, not in a fist, and
+    the pinch feature crosses 0.85. Fist gets excluded because thumb tip +
+    index tip are geometrically close in a natural fist — that's not a pinch.
+    """
+    if not state.present or state.features is None:
+        return False
+    if state.gesture == "fist":
+        return False
+    return state.features.pinch >= 0.85

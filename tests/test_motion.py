@@ -142,6 +142,18 @@ def test_drag_dx_dy_relative_to_start():
     assert last.drag_dx > 0.2  # moved meaningfully right after drag_start
 
 
+def test_pinch_event_suppressed_when_gesture_is_fist():
+    h = HandHistory(capacity=30)
+    d = MotionDetector()
+    h.push(_hf(pinch=0.0), 0.0)
+    d.update(h, now=0.0, gesture="open")
+    # Rising edge — but gesture is "fist" now.
+    h.push(_hf(pinch=0.95), 0.033)
+    u = d.update(h, now=0.033, gesture="fist")
+    assert u.event is None
+    assert u.pinching is False
+
+
 def test_clap_detector_fires_once_on_impact():
     # Track distance between hands as they clap
     events = []

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from handspring.features import is_pinching
 from handspring.types import FrameResult, HandState, Side
 
 _MAX_WINDOWS_DEFAULT = 8
@@ -179,14 +180,7 @@ class JarvisController:
     def _handle_create(self, frame: FrameResult, _now: float) -> None:
         left = frame.left
         right = frame.right
-        both_pinching = (
-            left.present
-            and right.present
-            and left.features is not None
-            and right.features is not None
-            and left.features.pinch >= _PINCH_ON_THRESHOLD
-            and right.features.pinch >= _PINCH_ON_THRESHOLD
-        )
+        both_pinching = is_pinching(left) and is_pinching(right)
         if self._create is None:
             # Entry requires both pinching AND index tips close together.
             if both_pinching and left.features is not None and right.features is not None:

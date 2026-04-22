@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from handspring.features import face_features, hand_features
+from handspring.features import face_features, hand_features, is_pinching
+from handspring.types import HandFeatures, HandState, MotionState
 from tests.fixtures import (
     face_closed_mouth,
     face_looking_down,
@@ -84,3 +85,50 @@ def test_hand_features_index_tip_extracted():
     f = hand_features(lm)
     assert abs(f.index_x - 0.73) < 1e-6
     assert abs(f.index_y - 0.21) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# is_pinching helper tests
+# ---------------------------------------------------------------------------
+
+
+def _hand(gesture: str, pinch: float) -> HandState:
+    return HandState(
+        present=True,
+        features=HandFeatures(
+            x=0.5,
+            y=0.5,
+            z=0.0,
+            openness=0.9,
+            pinch=pinch,
+            index_x=0.5,
+            index_y=0.5,
+        ),
+        gesture=gesture,  # type: ignore[arg-type]
+        motion=MotionState(False, False, 0.0, 0.0, None),
+    )
+
+
+def test_is_pinching_true_when_pinch_high_and_open():
+    h = _hand("open", pinch=0.9)
+    assert is_pinching(h) is True
+
+
+def test_is_pinching_false_for_fist_even_with_high_pinch_value():
+    h = _hand("fist", pinch=0.95)
+    assert is_pinching(h) is False
+
+
+def test_is_pinching_false_when_pinch_low():
+    h = _hand("open", pinch=0.5)
+    assert is_pinching(h) is False
+
+
+def test_is_pinching_false_when_hand_absent():
+    absent = HandState(
+        present=False,
+        features=None,
+        gesture="none",
+        motion=MotionState(False, False, 0.0, 0.0, None),
+    )
+    assert is_pinching(absent) is False
