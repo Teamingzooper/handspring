@@ -89,6 +89,18 @@ def hand_fist() -> NDArray[np.float32]:
     return _hand_skeleton((False, False, False, False, False))
 
 
+def hand_fist_thumb_poking_out() -> NDArray[np.float32]:
+    """A fist where the thumb sits slightly off the palm — should still
+    classify as `fist`, not `thumbs_up`."""
+    lm = _hand_skeleton((False, False, False, False, False))
+    # Thumb tip moved slightly to the side but nowhere near as extended
+    # as `hand_thumbs_up`'s dedicated upward thumb.
+    wrist = lm[0]
+    # Tip is down and to the side, close to its MCP (still curled).
+    lm[4] = (wrist[0] - 0.04, wrist[1] - 0.02, 0.0)
+    return lm
+
+
 def hand_open() -> NDArray[np.float32]:
     return _hand_skeleton((True, True, True, True, True))
 

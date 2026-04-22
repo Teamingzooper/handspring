@@ -47,15 +47,20 @@ def _thumb_extended(landmarks: NDArray[np.floating[Any]]) -> bool:
     if palm_width < 1e-6:
         return False
     thumb_dist = float(np.linalg.norm(thumb_tip - index_mcp))
-    return thumb_dist > palm_width * 0.7
+    return thumb_dist > palm_width * 0.95  # was 0.7
 
 
 def _thumb_up(landmarks: NDArray[np.floating[Any]]) -> bool:
-    """Thumb tip is well above the wrist (y decreases upward in image space)."""
+    """Thumb tip is higher (smaller Y) than ALL other fingertips
+    AND at least 0.15 above the wrist."""
     thumb_tip = landmarks[THUMB_TIP]
     wrist = landmarks[WRIST]
-    # Thumb must extend upward by at least ~10% of image height.
-    return bool((wrist[1] - thumb_tip[1]) > 0.1)
+    # Thumb tip must be clearly above wrist
+    if (wrist[1] - thumb_tip[1]) < 0.15:
+        return False
+    # Thumb tip must be above all other fingertips.
+    other_tips = [INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP]
+    return all(landmarks[tip_idx][1] > thumb_tip[1] for tip_idx in other_tips)
 
 
 def _thumb_index_touching(landmarks: NDArray[np.floating[Any]]) -> bool:

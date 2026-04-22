@@ -7,6 +7,7 @@ import numpy as np
 from handspring.gestures import classify_hand
 from tests.fixtures import (
     hand_fist,
+    hand_fist_thumb_poking_out,
     hand_ok,
     hand_open,
     hand_peace,
@@ -71,3 +72,7 @@ def test_rock_classifies_rock():
 
 def test_three_classifies_three():
     assert classify_hand(hand_three()) == "three"
+
+
+def test_fist_with_thumb_poking_out_still_classifies_fist():
+    assert classify_hand(hand_fist_thumb_poking_out()) == "fist"
