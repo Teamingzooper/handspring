@@ -48,6 +48,8 @@ class _CreateState:
     armed: bool = False
     cur_left: tuple[float, float] = (0.0, 0.0)
     cur_right: tuple[float, float] = (0.0, 0.0)
+    smooth_left: tuple[float, float] | None = None
+    smooth_right: tuple[float, float] | None = None
 
 
 @dataclass
@@ -528,6 +530,8 @@ class DesktopController:
                         self._last_now + self._post_spawn_hold_seconds,
                     )
                 self._create.armed = False
+                self._create.smooth_left = None
+                self._create.smooth_right = None
             return
         assert left.features is not None and right.features is not None
         left_sx, left_sy = self._index_screen(left.features)
@@ -540,9 +544,28 @@ class DesktopController:
                 self._create.armed = True
                 self._create.cur_left = (left_sx, left_sy)
                 self._create.cur_right = (right_sx, right_sy)
+                self._create.smooth_left = (left_sx, left_sy)
+                self._create.smooth_right = (right_sx, right_sy)
             return
-        self._create.cur_left = (left_sx, left_sy)
-        self._create.cur_right = (right_sx, right_sy)
+        # Armed — live-track corners with EMA smoothing.
+        alpha = self._cfg().create.smoothing
+        if self._create.smooth_left is None:
+            self._create.smooth_left = (left_sx, left_sy)
+            self._create.smooth_right = (right_sx, right_sy)
+        else:
+            sl = self._create.smooth_left
+            sr = self._create.smooth_right
+            assert sr is not None
+            self._create.smooth_left = (
+                alpha * left_sx + (1 - alpha) * sl[0],
+                alpha * left_sy + (1 - alpha) * sl[1],
+            )
+            self._create.smooth_right = (
+                alpha * right_sx + (1 - alpha) * sr[0],
+                alpha * right_sy + (1 - alpha) * sr[1],
+            )
+        self._create.cur_left = self._create.smooth_left
+        self._create.cur_right = self._create.smooth_right
 
 
 def _first_create_app(tree: tuple[RadialItem, ...]) -> str:

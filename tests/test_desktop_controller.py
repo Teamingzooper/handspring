@@ -296,21 +296,22 @@ def test_create_commits_with_bounds_matching_fingertips():
             ),
             now=0.0,
         )
-        # Pull apart to diagonal corners.
-        c.update(
-            _frame(
-                _hand("open", 0.2, 0.3, pinch=0.95),
-                _hand("open", 0.7, 0.75, pinch=0.95),
-            ),
-            now=0.1,
-        )
+        # Pull apart to diagonal corners — hold for many frames so EMA converges.
+        for i in range(1, 40):
+            c.update(
+                _frame(
+                    _hand("open", 0.2, 0.3, pinch=0.95),
+                    _hand("open", 0.7, 0.75, pinch=0.95),
+                ),
+                now=i * 0.033,
+            )
         # Release both pinches → commit.
         c.update(
             _frame(
                 _hand("open", 0.2, 0.3, pinch=0.1),
                 _hand("open", 0.7, 0.75, pinch=0.1),
             ),
-            now=0.2,
+            now=40 * 0.033,
         )
         nfw.assert_called_once()
         # Bounds kwarg should be present and describe the pulled-apart rect.
@@ -333,14 +334,15 @@ def test_pending_create_bounds_exposes_live_rect():
         ),
         now=0.0,
     )
-    # Now armed — moving should update.
-    c.update(
-        _frame(
-            _hand("open", 0.3, 0.3, pinch=0.95),
-            _hand("open", 0.7, 0.7, pinch=0.95),
-        ),
-        now=0.1,
-    )
+    # Now armed — run many frames so EMA converges to the target positions.
+    for i in range(1, 40):
+        c.update(
+            _frame(
+                _hand("open", 0.3, 0.3, pinch=0.95),
+                _hand("open", 0.7, 0.7, pinch=0.95),
+            ),
+            now=i * 0.033,
+        )
     rect = c.pending_create_bounds()
     assert rect is not None
     x, y, w_, h_ = rect
@@ -497,3 +499,38 @@ def test_flick_selects_app_via_create_leaf():
         )
         naw.assert_called_once()
         assert naw.call_args[0][0] == "Finder"
+
+
+def test_create_ghost_rect_ema_smooths_jitter():
+    """A jittery fingertip pair produces a smoothed ghost rect that
+    lags the raw position (not exactly equal)."""
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+    ):
+        # Arm: both hands pinching near each other.
+        c.update(
+            _frame(
+                _hand("open", 0.45, 0.5, pinch=0.95),
+                _hand("open", 0.50, 0.5, pinch=0.95),
+            ),
+            now=0.0,
+        )
+        # Huge jump on the left fingertip one frame.
+        c.update(
+            _frame(
+                _hand("open", 0.10, 0.5, pinch=0.95),
+                _hand("open", 0.50, 0.5, pinch=0.95),
+            ),
+            now=0.05,
+        )
+        rect = c.pending_create_bounds()
+        assert rect is not None
+        x_min, _y, w_, _h = rect
+        # With smoothing < 1.0, the ghost should *not* have snapped fully
+        # to the new raw left position (0.10). It should be between the
+        # old (~0.45) and the raw target.
+        # Concretely: the reported x_min should be greater than 0.10 + epsilon.
+        assert x_min > 0.15
