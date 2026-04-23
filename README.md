@@ -73,33 +73,42 @@ Hit Ctrl+C in either terminal to quit.
 
 ## Desktop mode: the radial menu
 
-Pinch your **left** hand (index-tip + thumb-tip touching) and hold. After 400 ms of hold, a wheel appears around your pinch origin. Seven slices, clockwise from top:
+Pinch your **left** hand to open the radial. There's no hold — labels appear instantly around the pinch point. Move your hand a tiny bit toward one of the six commands, then release pinch to fire it. Release at the origin (or very close to it) cancels.
 
-| Slice | Has sub-menu? | What it does |
-|---|---|---|
-| **None** | no | Mode → none. Both-hand-pinch-pull-apart becomes a no-op. Dot goes dim grey, labeled `NONE`. |
-| **Create** | `Finder · Safari · Messages · Notes · Terminal · Music` | Mode → create. The selected sub becomes the "app to spawn" for the create gesture. Dot stays grey, labeled with the app name. |
-| **Window** | `Close · Minimize · Fullscreen · Left · Right · Center` | One-shot action on the frontmost macOS window. Left/Right tile to halves; Center fits 70% × 75% of usable area. Fullscreen uses macOS native (Ctrl+Cmd+F). |
-| **Scroll** | no | Mode → scroll. Dot turns blue. Left-hand Y now scrolls: top third scrolls up, middle idle, bottom third scrolls down. Rate ramps with distance from center. |
-| **Mission** | no | Opens Mission Control (Ctrl+Up). |
-| **Desktops** | `Left · Right` | Page between Spaces (Ctrl+←/→). |
-| **Screenshot** | `Screen · Window · Selection` | Saves to `~/Desktop/handspring_<timestamp>.png`. Screen = instant, Window = click to pick, Selection = drag a rect. |
+Default commands, clockwise from 12 o'clock:
 
-### Selection physics
+| Position | Command |
+|---|---|
+| Top | None (disable gestures) |
+| Upper-right | Settings (opens the settings web UI) |
+| Lower-right | Mission Control |
+| Bottom | New Finder window |
+| Lower-left | Scroll mode (left hand y → scroll wheel) |
+| Upper-left | Screenshot (whole screen) |
 
-Three distance zones from your pinch origin, all in camera-normalized units:
+**Why this is fast:**
+- No hold-to-open delay.
+- Direction is only *committed* on release — intermediate jitter doesn't mis-fire.
+- Angular hysteresis prevents flicker between neighboring slices.
+- Only one level; no sub-menus.
 
-- **`< 0.03`** — center dead zone. Release here = cancel.
-- **`0.03 – 0.10`** — root ring. Angle picks which root slice is highlighted. Sub-ring appears as a dim preview around whichever root you're hovering.
-- **`≥ 0.10`** — sub ring. Root **locks** to whatever it was at crossover; angle now picks the sub slice. Pull hand back into the root ring to unlock and swap roots.
+**Customizing.** Edit `~/.config/handspring/config.toml`'s `radial_tree` section (or use the Settings UI) to reorder, add, or swap commands. Built-in command names are `None`, `Settings`, `Mission`, `Create`, `Scroll`, `Screenshot`. Any other name with a `command = "..."` field runs that shell command when fired, so you can add e.g.:
 
-Release pinch to commit the currently-highlighted selection. Sub wins if non-null; otherwise the root's default action (if any) fires.
+```toml
+[[radial_tree]]
+name    = "Slack"
+command = "open -a Slack"
+```
 
-### Visual states
+Tuning (camera-space units):
 
-- Countdown arc before 400 ms — fills clockwise from the top.
-- Root wedges: dim grey by default, brighter grey when hovered.
-- Sub wedges: appear low-opacity as soon as you hover a root with children (preview); brighten to "armed" when your hand crosses the sub threshold; fill neon green when that specific sub is hovered.
+```toml
+[radial]
+flick_threshold    = 0.03   # minimum displacement to commit (smaller = twitchier)
+angular_hysteresis = 0.15   # larger = stickier slice boundaries
+```
+
+The **two-hand create gesture** (pinch both hands near each other, pull apart, release) is unchanged. Its ghost rectangle now smooths with an EMA (`[create] smoothing = 0.35`) so the preview doesn't jitter while you're sizing.
 
 ---
 
@@ -211,7 +220,7 @@ Both entry points emit OSC to `127.0.0.1:9000` by default (override with `--host
 
 Handspring reads its settings from a TOML file at `~/.config/handspring/config.toml` (override with `--config PATH`). The file is auto-created with defaults on first run. Two ways to edit:
 
-1. **In the browser:** pinch-and-hold left hand → rotate to **More** → release on **Settings**. Your default browser opens `http://127.0.0.1:8766/` with sliders for every knob plus a drag-and-drop editor for the radial tree. Saving applies instantly.
+1. **In the browser:** open the radial with your left hand and select **Settings**. Your default browser opens `http://127.0.0.1:8766/` with sliders for every knob plus a drag-and-drop editor for the radial tree. Saving applies instantly.
 2. **In your editor:** edit the TOML directly. A background watcher picks up file changes within ~1 second — no restart needed.
 
 Both paths write through the same config, so you can freely mix them.
@@ -224,9 +233,8 @@ smoothing     = 0.35   # EMA — higher = snappier, lower = smoother
 inset         = 0.08   # camera dead zone at each edge
 
 [radial]
-hold_seconds  = 0.4    # pinch-hold before wheel opens
-inner_radius  = 0.03   # dead zone
-sub_threshold = 0.10   # root → sub-ring crossover
+flick_threshold    = 0.03   # minimum displacement to commit (smaller = twitchier)
+angular_hysteresis = 0.15   # larger = stickier slice boundaries
 
 [scroll]
 deadzone      = 0.12
@@ -261,29 +269,24 @@ settings_port  = 8766
 
 ### Radial tree
 
-The tree is an ordered list of `[[radial_tree]]` entries. Clockwise from top. Each entry has a name, a list of sub-slices, and an optional shell `command` for user-defined leaves.
+The tree is an ordered list of `[[radial_tree]]` entries. Clockwise from top. Each entry has a name and an optional shell `command` for user-defined leaves.
 
 ```toml
 [[radial_tree]]
 name = "None"
-subs = []
 
 [[radial_tree]]
-name = "Create"
-subs = ["Finder", "Safari", "Messages", "Notes", "Terminal", "Music"]
+name = "Settings"
 
-# ... built-ins: Window, Scroll, Mission, Desktops, Screenshot, More ...
+# ... built-ins: Mission, Create, Scroll, Screenshot ...
 
-# A user-added leaf with a custom command. No subs, so it fires on release.
+# A user-added leaf with a custom command — fires on release.
 [[radial_tree]]
 name    = "Slack"
-subs    = []
 command = "open -a Slack"
 ```
 
-Built-in root names still trigger their built-in behavior (`Create`, `Window`, `Screenshot`, `Mission`, `Desktops`, `Scroll`, `More`, `None`). Anything else with a `command` runs the command in the background.
-
-Any string that `open -a <Name>` accepts works in the `Create` sub-ring (e.g. `"Google Chrome"`, `"Visual Studio Code"`, `"Cursor"`).
+Built-in command names are `None`, `Settings`, `Mission`, `Create`, `Scroll`, `Screenshot`. Anything else with a `command` field runs that shell command when fired.
 
 ### Disabling the settings UI
 
@@ -294,10 +297,8 @@ Pass `--no-settings` to skip the settings server entirely. You can still hand-ed
 `src/handspring/overlay.py`:
 
 ```python
-r_inner = 40.0       # center dead-zone ring radius
-r_root = 220.0       # outer radius of root ring
-r_sub_inner = 235.0  # gap before sub ring starts
-r_sub = 410.0        # outer radius of sub ring
+r_inner = 40.0   # center dead-zone ring radius
+r_outer = 220.0  # outer radius of the single ring
 ```
 
 Cursor dot colors per mode are in `drawRect_`: grey (create), blue (scroll), dim grey (none).
@@ -335,7 +336,7 @@ python -m handspring [options]
   --web-port PORT          MJPEG server port (default: 8765)
   --no-web                 disable the MJPEG web server
   --settings-port PORT     settings UI port (default: 8766)
-  --no-settings            disable the settings web UI (radial → More → Settings)
+  --no-settings            disable the settings web UI (radial → Settings)
   --config PATH            override config.toml location
                            (default: ~/.config/handspring/config.toml)
   --no-overlay             disable the native always-on-top overlay
@@ -387,7 +388,7 @@ FrameResult (dataclass, one per frame)
 - `overlay.py` — transparent click-through NSWindow rendered from the main loop via event-pump. Level = NSPopUpMenuWindowLevel (above most apps, below menubar).
 - `web_server.py` — stdlib `http.server` with MJPEG `multipart/x-mixed-replace` streaming from a shared `LatestFrame`.
 - `config.py` — typed dataclass `Config`, TOML load/save, thread-safe `ConfigStore`, mtime-poll file watcher. Read-through snapshots; no half-written state.
-- `settings_server.py` — separate HTTP server serving the settings SPA (`GET /`, `GET /api/config`, `POST /api/config`, `POST /api/reload`). Opened from the radial via "More → Settings".
+- `settings_server.py` — separate HTTP server serving the settings SPA (`GET /`, `GET /api/config`, `POST /api/config`, `POST /api/reload`). Opened from the radial via the Settings command.
 - `jarvis.py` — the old internal-windows system. Not wired into the current desktop entry point, but the gesture detection logic is reused as a reference. Still used by the OSC emitter's `/jarvis/*` addresses for external consumers.
 - `synth.py`, `synth_params.py`, `synth_ui.py` — audio engine, thread-safe parameter container, gesture → param mapping.
 
