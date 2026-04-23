@@ -110,30 +110,14 @@ class ServerConfig:
     settings_port: int = 8766
 
 
-_DEFAULT_RADIAL_APPS = (
-    "Finder",
-    "Safari",
-    "Messages",
-    "Notes",
-    "Terminal",
-    "Music",
-)
-_DEFAULT_SCREENSHOT_SUBS = ("Screen", "Window", "Selection")
-_DEFAULT_WINDOW_SUBS = ("Close", "Minimize", "Fullscreen", "Left", "Right", "Center")
-_DEFAULT_DESKTOP_SUBS = ("Left", "Right")
-_DEFAULT_MORE_SUBS = ("Settings", "Reload", "Quit")
-
-
 def _default_radial_tree() -> tuple[RadialItem, ...]:
     return (
         RadialItem("None"),
-        RadialItem("Create", _DEFAULT_RADIAL_APPS),
-        RadialItem("Window", _DEFAULT_WINDOW_SUBS),
-        RadialItem("Scroll"),
+        RadialItem("Settings"),
         RadialItem("Mission"),
-        RadialItem("Desktops", _DEFAULT_DESKTOP_SUBS),
-        RadialItem("Screenshot", _DEFAULT_SCREENSHOT_SUBS),
-        RadialItem("More", _DEFAULT_MORE_SUBS),
+        RadialItem("Create", ("Finder",)),  # subs[0] = which app to spawn
+        RadialItem("Scroll"),
+        RadialItem("Screenshot"),
     )
 
 

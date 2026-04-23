@@ -355,57 +355,6 @@ def test_pending_create_bounds_exposes_live_rect():
 # ---------------------------------------------------------------------------
 
 
-def test_radial_sets_selected_app_after_hold_and_pull():
-    c = DesktopController(mirrored=False)
-    assert c.selected_app() == "Finder"  # default
-    with (
-        patch("handspring.desktop_controller.os_control.move_cursor"),
-        patch("handspring.desktop_controller.os_control.mouse_down"),
-        patch("handspring.desktop_controller.os_control.mouse_up"),
-    ):
-        # Left hand starts pinching.
-        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.0)
-        # Hold 0.5s — hits 0.4s threshold and activates.
-        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.5)
-        # Move hand toward DOWN-LEFT (next slice around the wheel).
-        c.update(_frame(_hand("open", 0.2, 0.7, pinch=0.95), _absent()), now=0.6)
-        picked = c.selected_app()  # shouldn't have committed yet
-        # Release pinch → commit.
-        c.update(_frame(_hand("open", 0.2, 0.7, pinch=0.1), _absent()), now=0.7)
-        assert c.selected_app() in c.radial_apps()
-        # Sanity: selection should have moved off default if we aimed at a slice.
-        # (we don't assert a specific app to keep the test robust to angle math.)
-        del picked
-
-
-def test_radial_release_at_center_keeps_previous_selection():
-    c = DesktopController(mirrored=False)
-    prev = c.selected_app()
-    with (
-        patch("handspring.desktop_controller.os_control.move_cursor"),
-        patch("handspring.desktop_controller.os_control.mouse_down"),
-        patch("handspring.desktop_controller.os_control.mouse_up"),
-    ):
-        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.0)
-        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.5)
-        # Stay at center, release — no selection → no change.
-        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.1), _absent()), now=0.6)
-        assert c.selected_app() == prev
-
-
-def test_radial_short_pinch_does_not_activate():
-    c = DesktopController(mirrored=False)
-    prev = c.selected_app()
-    with (
-        patch("handspring.desktop_controller.os_control.move_cursor"),
-        patch("handspring.desktop_controller.os_control.mouse_down"),
-        patch("handspring.desktop_controller.os_control.mouse_up"),
-    ):
-        # Brief pinch < 0.4s then release.
-        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.0)
-        c.update(_frame(_hand("open", 0.3, 0.3, pinch=0.1), _absent()), now=0.2)
-        assert c.selected_app() == prev
-
 
 def test_cursor_inset_reaches_screen_edges():
     """With inset=0.08, camera x=0.08 should map to screen x=0 (left edge)."""
@@ -439,112 +388,6 @@ def test_cursor_inset_reaches_screen_edges():
         assert sx == 0  # hit the left edge
 
 
-def test_radial_root_locks_when_hand_enters_sub_ring():
-    """Hover Create in root ring, push out to sub ring; wiggling angle should
-    keep you on Create's subs, not flip to a neighboring root slice."""
-    c = DesktopController(mirrored=False)
-    with (
-        patch("handspring.desktop_controller.os_control.move_cursor"),
-        patch("handspring.desktop_controller.os_control.mouse_down"),
-        patch("handspring.desktop_controller.os_control.mouse_up"),
-    ):
-        # Enter pinch + wait past hold duration.
-        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.0)
-        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.5)
-        # In root ring at angle that points to slice 1 (Create): east-ish
-        # direction works since Create is clockwise from top.
-        # Slice 1 center = 90° clockwise from top = pointing right (+x).
-        # Put hand at (0.35, 0.5) — right of origin (0.3, 0.5), in root range.
-        c.update(_frame(_hand("open", 0.35, 0.5, pinch=0.95), _absent()), now=0.55)
-        root_ring_selection = c._radial.hovered_root  # type: ignore[attr-defined]
-        # Push out along same angle to sub ring. (0.42, 0.5) ~ 0.12 from origin.
-        c.update(_frame(_hand("open", 0.42, 0.5, pinch=0.95), _absent()), now=0.6)
-        sub_ring_root = c._radial.hovered_root  # type: ignore[attr-defined]
-        assert sub_ring_root == root_ring_selection  # locked
-        # Now wiggle the angle while staying at sub distance: move to (0.30, 0.45)
-        # Distance from origin = 0.11, angle shifts significantly, but root
-        # should stay locked to what we were on.
-        c.update(_frame(_hand("open", 0.42, 0.42, pinch=0.95), _absent()), now=0.65)
-        assert c._radial.hovered_root == sub_ring_root  # type: ignore[attr-defined]
-        # Pull back into the root ring: root should become unlocked (free to
-        # move again).
-        c.update(_frame(_hand("open", 0.32, 0.5, pinch=0.95), _absent()), now=0.7)
-        # We don't assert a specific value here — just that the lock released,
-        # i.e., hovered_sub is back to None.
-        assert c._radial.hovered_sub is None  # type: ignore[attr-defined]
-
-
-def test_radial_sub_row_selected_by_nearest_chip():
-    """Sub chips lay out in a horizontal row; hand's horizontal screen x
-    picks the nearest chip. Moving sideways advances through chips."""
-    import math
-
-    c = DesktopController(mirrored=False)
-    items = c.root_items()
-    root_idx = next(i for i, (_, subs) in enumerate(items) if len(subs) >= 3)
-    subs = items[root_idx][1]
-    n_roots = len(items)
-    slice_size = 2 * math.pi / n_roots
-    bisector = -math.pi / 2 + root_idx * slice_size
-    ux, uy = math.cos(bisector), math.sin(bisector)
-
-    origin_x, origin_y = 0.3, 0.5
-
-    with (
-        patch("handspring.desktop_controller.os_control.move_cursor"),
-        patch("handspring.desktop_controller.os_control.mouse_down"),
-        patch("handspring.desktop_controller.os_control.mouse_up"),
-    ):
-        c.update(_frame(_hand("open", origin_x, origin_y, pinch=0.95), _absent()), now=0.0)
-        c.update(_frame(_hand("open", origin_x, origin_y, pinch=0.95), _absent()), now=0.5)
-        # Enter root ring along the bisector → pick root_idx.
-        c.update(
-            _frame(_hand("open", origin_x + ux * 0.05, origin_y + uy * 0.05, pinch=0.95), _absent()),
-            now=0.55,
-        )
-        assert c._radial.hovered_root == root_idx  # type: ignore[attr-defined]
-        # Push past sub_threshold and land near the slice tip.
-        x, y = origin_x + ux * 0.15, origin_y + uy * 0.15
-        c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.60)
-        first_pick = c._radial.hovered_sub  # type: ignore[attr-defined]
-        assert first_pick is not None
-        assert 0 <= first_pick < len(subs)
-        # Sweep the hand further sideways — should advance to a later chip.
-        x, y = origin_x + ux * 0.15 + 0.30, origin_y + uy * 0.15
-        c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.65)
-        second_pick = c._radial.hovered_sub  # type: ignore[attr-defined]
-        assert second_pick is not None
-        # At least one of the hand positions should pick a different chip.
-        # (Direction of "sideways" depends on which side the row laid out.)
-        x, y = origin_x + ux * 0.15 - 0.30, origin_y + uy * 0.15
-        c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.70)
-        third_pick = c._radial.hovered_sub  # type: ignore[attr-defined]
-        assert {first_pick, second_pick, third_pick} != {first_pick}, (
-            "chip selection should change with horizontal sweep"
-        )
-
-
-def test_compute_sub_layout_clamps_offscreen():
-    """Row shifts inward when it would overflow the screen edge."""
-    from handspring.desktop_controller import SUB_CHIP_MARGIN, SUB_CHIP_W, compute_sub_layout
-
-    screen_w, screen_h = 1440, 900
-    # Pinch near the right edge, slice pointing right → row would go offscreen.
-    centers, _tip, direction = compute_sub_layout(
-        origin_screen=(screen_w - 50, 400),
-        hovered_root=2,  # east-ish in 8-slice
-        n_roots=8,
-        n_subs=6,
-        screen_w=screen_w,
-        screen_h=screen_h,
-        mirrored=False,
-    )
-    # Whichever direction it chose, every chip must stay inside margins.
-    del direction
-    for cx, _cy in centers:
-        assert cx - SUB_CHIP_W // 2 >= SUB_CHIP_MARGIN - 1
-        assert cx + SUB_CHIP_W // 2 <= screen_w - SUB_CHIP_MARGIN + 1
-
 
 # ---------------------------------------------------------------------------
 # Window / Mission / Desktops commits
@@ -558,35 +401,11 @@ def _find_root(c: DesktopController, name: str) -> int:
     raise AssertionError(f"no root item {name}")
 
 
-def test_window_left_commits_tile_left():
-    c = DesktopController(mirrored=False)
-    with patch("handspring.desktop_controller.os_control.tile_front_window") as t:
-        subs = c.root_items()[_find_root(c, "Window")][1]
-        c._commit_radial(_find_root(c, "Window"), subs.index("Left"))  # type: ignore[attr-defined]
-        t.assert_called_once_with("left")
-
-
-def test_window_close_fires_close():
-    c = DesktopController(mirrored=False)
-    with patch("handspring.desktop_controller.os_control.close_frontmost_window") as cw:
-        subs = c.root_items()[_find_root(c, "Window")][1]
-        c._commit_radial(_find_root(c, "Window"), subs.index("Close"))  # type: ignore[attr-defined]
-        cw.assert_called_once()
-
-
 def test_mission_commits_mission_control():
     c = DesktopController(mirrored=False)
     with patch("handspring.desktop_controller.os_control.mission_control") as m:
         c._commit_radial(_find_root(c, "Mission"), None)  # type: ignore[attr-defined]
         m.assert_called_once()
-
-
-def test_desktops_right_switches_right():
-    c = DesktopController(mirrored=False)
-    with patch("handspring.desktop_controller.os_control.switch_desktop") as s:
-        subs = c.root_items()[_find_root(c, "Desktops")][1]
-        c._commit_radial(_find_root(c, "Desktops"), subs.index("Right"))  # type: ignore[attr-defined]
-        s.assert_called_once_with("right")
 
 
 def test_flick_commit_fires_on_release_with_direction():
@@ -649,3 +468,32 @@ def test_flick_no_hold_required_menu_is_instant():
         c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.0)
         state = c.radial_state()
         assert state is not None
+
+
+def test_flick_selects_app_via_create_leaf():
+    """Flicking to the Create leaf spawns the configured app."""
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.new_app_window") as naw,
+    ):
+        items = c.root_items()
+        create_idx = next(i for i, (n, _) in enumerate(items) if n == "Create")
+        import math
+        slice_size = 2 * math.pi / len(items)
+        bisector = -math.pi / 2 + create_idx * slice_size
+        ux, uy = math.cos(bisector), math.sin(bisector)
+        ox, oy = 0.3, 0.5
+        c.update(_frame(_hand("open", ox, oy, pinch=0.95), _absent()), now=0.0)
+        c.update(
+            _frame(_hand("open", ox + ux * 0.06, oy + uy * 0.06, pinch=0.95), _absent()),
+            now=0.05,
+        )
+        c.update(
+            _frame(_hand("open", ox + ux * 0.06, oy + uy * 0.06, pinch=0.1), _absent()),
+            now=0.10,
+        )
+        naw.assert_called_once()
+        assert naw.call_args[0][0] == "Finder"

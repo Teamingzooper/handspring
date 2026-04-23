@@ -24,12 +24,10 @@ from handspring.config import (
 from handspring.settings_server import SettingsServer, _config_from_json
 
 
-def test_default_config_has_more_slot() -> None:
+def test_default_config_has_expected_six_commands() -> None:
     cfg = Config()
     names = [it.name for it in cfg.radial_tree]
-    assert "More" in names
-    more = next(it for it in cfg.radial_tree if it.name == "More")
-    assert more.subs == ("Settings", "Reload", "Quit")
+    assert names == ["None", "Settings", "Mission", "Create", "Scroll", "Screenshot"]
 
 
 def test_toml_round_trip(tmp_path: Path) -> None:
