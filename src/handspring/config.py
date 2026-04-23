@@ -220,7 +220,7 @@ def _dump_toml(cfg: Config) -> str:
     data = _to_dict(cfg)
     lines: list[str] = [
         "# handspring config. Edits here are picked up live.",
-        "# The settings web UI (radial → More → Settings) writes to this file too.",
+        "# The settings web UI writes to this file too.",
         "",
     ]
     # Ordered top-level sections first.

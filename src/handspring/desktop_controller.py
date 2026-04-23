@@ -55,12 +55,10 @@ class _CreateState:
 @dataclass
 class _RadialState:
     pinching: bool = False
-    pinch_start: float = 0.0
     active: bool = False
     origin: tuple[float, float] = (0.0, 0.0)
     cur: tuple[float, float] = (0.0, 0.0)
     hovered_root: int | None = None
-    hovered_sub: int | None = None
 
 
 class DesktopController:
@@ -357,7 +355,6 @@ class DesktopController:
             r.pinching = False
             r.active = False
             r.hovered_root = None
-            r.hovered_sub = None
             return
 
         assert left.features is not None
@@ -368,12 +365,10 @@ class DesktopController:
         if not r.pinching:
             # Instant: menu is active from frame zero.
             r.pinching = True
-            r.pinch_start = now
             r.active = True
             r.origin = (cx, cy)
             r.cur = (cx, cy)
             r.hovered_root = None
-            r.hovered_sub = None
             return
 
         r.cur = (cx, cy)

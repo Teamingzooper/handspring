@@ -534,3 +534,53 @@ def test_create_ghost_rect_ema_smooths_jitter():
         # old (~0.45) and the raw target.
         # Concretely: the reported x_min should be greater than 0.10 + epsilon.
         assert x_min > 0.15
+
+
+def test_flick_hysteresis_keeps_selection_stable_near_boundary():
+    """Small wobble across a slice boundary stays on the originally-picked slice."""
+    import math
+
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+    ):
+        items = c.root_items()
+        n = len(items)
+        slice_size = 2 * math.pi / n
+        # Pick slice 2 (Mission) for clarity.
+        target = 2
+        bisector = -math.pi / 2 + target * slice_size
+        # Aim at slice 2 solidly first.
+        ox, oy = 0.3, 0.5
+        c.update(_frame(_hand("open", ox, oy, pinch=0.95), _absent()), now=0.0)
+        c.update(
+            _frame(
+                _hand("open", ox + math.cos(bisector) * 0.06, oy + math.sin(bisector) * 0.06, pinch=0.95),
+                _absent(),
+            ),
+            now=0.05,
+        )
+        assert c._radial.hovered_root == target  # type: ignore[attr-defined]
+        # Now nudge slightly toward the NEXT slice's bisector, but not
+        # past the expanded angular half-width. With hysteresis = 0.15,
+        # the current slice's half-range is slice_size/2 * 1.15 ≈ 36°
+        # for 6 slices. Move hand by only half_slice_angle + 5° — inside
+        # the hysteresis band.
+        nudge_angle = bisector + slice_size * 0.55  # slightly past the boundary
+        c.update(
+            _frame(
+                _hand(
+                    "open",
+                    ox + math.cos(nudge_angle) * 0.06,
+                    oy + math.sin(nudge_angle) * 0.06,
+                    pinch=0.95,
+                ),
+                _absent(),
+            ),
+            now=0.10,
+        )
+        # Thanks to hysteresis (0.15), it should still be on `target`,
+        # not the neighbor.
+        assert c._radial.hovered_root == target  # type: ignore[attr-defined]
