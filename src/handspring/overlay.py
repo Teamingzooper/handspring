@@ -173,163 +173,53 @@ if _AVAILABLE:
         progress: float,
         root_items: tuple[tuple[str, tuple[str, ...]], ...],
     ) -> None:
-        r_inner = 40.0  # center dead-zone visual
-        r_root = 220.0  # outer radius of root ring
+        del hovered_sub, progress  # flick model has no sub or countdown
+        r_inner = 40.0
+        r_root = 220.0
 
-        # During the hold countdown, show ONLY a thin filling arc — no slices.
-        if progress < 1.0:
-            Quartz.CGContextSetRGBStrokeColor(ctx, 0.75, 0.75, 0.75, 0.9)
-            Quartz.CGContextSetLineWidth(ctx, 8.0)
-            end_radians = -math.pi / 2 + 2 * math.pi * progress
-            Quartz.CGContextBeginPath(ctx)
-            Quartz.CGContextAddArc(ctx, ox, oy, 60.0, -math.pi / 2, end_radians, False)
-            Quartz.CGContextStrokePath(ctx)
-            return
+        # Pinch-origin dot (where "no commit" lives).
+        Quartz.CGContextSetRGBFillColor(ctx, 0.85, 0.85, 0.85, 0.85)
+        Quartz.CGContextFillEllipseInRect(ctx, Quartz.CGRectMake(ox - 6, oy - 6, 12, 12))
 
-        # --- Root ring: filled annular wedges ---
+        # Flick-threshold circle (commit boundary).
+        Quartz.CGContextSetRGBStrokeColor(ctx, 0.85, 0.85, 0.85, 0.35)
+        Quartz.CGContextSetLineWidth(ctx, 1.0)
+        Quartz.CGContextStrokeEllipseInRect(
+            ctx, Quartz.CGRectMake(ox - r_inner, oy - r_inner, 2 * r_inner, 2 * r_inner)
+        )
+
         n = len(root_items)
+        if n == 0:
+            return
         slice_size = 2 * math.pi / n
         for i, (name, _) in enumerate(root_items):
-            # Slice i occupies the angular range centered on its cardinal direction.
             start = -math.pi / 2 + (i - 0.5) * slice_size
             end = start + slice_size
             highlighted = i == hovered_root
-            # Wedge fill.
             _pie_wedge_path(ctx, ox, oy, r_inner, r_root, start, end)
             if highlighted:
-                Quartz.CGContextSetRGBFillColor(ctx, 0.30, 0.30, 0.30, 0.85)
+                Quartz.CGContextSetRGBFillColor(ctx, 0.28, 0.50, 0.10, 0.88)
             else:
-                Quartz.CGContextSetRGBFillColor(ctx, 0.10, 0.10, 0.10, 0.70)
+                Quartz.CGContextSetRGBFillColor(ctx, 0.10, 0.10, 0.10, 0.55)
             Quartz.CGContextFillPath(ctx)
-            # Wedge outline.
             _pie_wedge_path(ctx, ox, oy, r_inner, r_root, start, end)
             if highlighted:
-                Quartz.CGContextSetRGBStrokeColor(ctx, 0.90, 0.90, 0.90, 0.95)
-                Quartz.CGContextSetLineWidth(ctx, 1.5)
+                Quartz.CGContextSetRGBStrokeColor(ctx, 0.53, 1.0, 0.0, 1.0)
+                Quartz.CGContextSetLineWidth(ctx, 2.0)
             else:
-                Quartz.CGContextSetRGBStrokeColor(ctx, 0.45, 0.45, 0.45, 0.80)
+                Quartz.CGContextSetRGBStrokeColor(ctx, 0.40, 0.40, 0.40, 0.75)
                 Quartz.CGContextSetLineWidth(ctx, 1.0)
             Quartz.CGContextStrokePath(ctx)
-            # Label at the slice center.
             center_angle = -math.pi / 2 + i * slice_size
             lr = (r_inner + r_root) * 0.5
             lx = ox + lr * math.cos(center_angle)
             ly = oy + lr * math.sin(center_angle)
             color = (
-                AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 1.0, 1.0, 1.0)
-                if highlighted
-                else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.80, 0.80, 0.80, 1.0)
-            )
-            _draw_label(name, lx, ly, color, highlighted)
-
-        # --- Horizontal sub-chip row at the hovered slice's tip ---
-        # Chips are always laid out in a horizontal line with spacing. The
-        # row auto-picks a side (left/right) and slides back if it would
-        # clip the screen edge. Selection math lives in desktop_controller —
-        # the overlay just draws the positions it reports.
-        if hovered_root is None:
-            return
-        _name, subs = root_items[hovered_root]
-        if not subs:
-            return
-        _draw_sub_chips_row(ctx, ox, oy, hovered_root, hovered_sub, subs, len(root_items), r_root)
-
-    def _draw_sub_chips_row(
-        ctx: Any,
-        ox: float,
-        oy: float,
-        hovered_root: int,
-        hovered_sub: int | None,
-        subs: tuple[str, ...],
-        n_roots: int,
-        r_root: float,
-    ) -> None:
-        from handspring.desktop_controller import (
-            SUB_CHIP_H,
-            SUB_CHIP_W,
-            compute_sub_layout,
-        )
-
-        screen = AppKit.NSScreen.mainScreen().frame()
-        screen_w = int(screen.size.width)
-        screen_h = int(screen.size.height)
-
-        # The overlay receives origin_screen already mirrored by __main__'s
-        # _cam_to_screen. Pass mirrored=False to compute_sub_layout so it
-        # doesn't double-flip.
-        centers, tip, _dir = compute_sub_layout(
-            (int(ox), int(oy)),
-            hovered_root,
-            n_roots,
-            len(subs),
-            screen_w,
-            screen_h,
-            mirrored=False,
-        )
-
-        # Thin connector line from slice tip to first chip.
-        if centers:
-            Quartz.CGContextSetRGBStrokeColor(ctx, 0.60, 0.60, 0.60, 0.55)
-            Quartz.CGContextSetLineWidth(ctx, 1.0)
-            Quartz.CGContextBeginPath(ctx)
-            Quartz.CGContextMoveToPoint(ctx, tip[0], tip[1])
-            Quartz.CGContextAddLineToPoint(ctx, centers[0][0], centers[0][1])
-            Quartz.CGContextStrokePath(ctx)
-
-        sub_armed = hovered_sub is not None
-        corner = 14.0
-        for j, sub_name in enumerate(subs):
-            cx, cy = centers[j]
-            highlighted = j == hovered_sub
-            rect = Quartz.CGRectMake(
-                cx - SUB_CHIP_W / 2, cy - SUB_CHIP_H / 2, SUB_CHIP_W, SUB_CHIP_H
-            )
-            _rounded_rect_path(ctx, rect, corner)
-            if highlighted:
-                Quartz.CGContextSetRGBFillColor(ctx, 0.28, 0.50, 0.10, 0.92)
-            elif sub_armed:
-                Quartz.CGContextSetRGBFillColor(ctx, 0.12, 0.12, 0.12, 0.85)
-            else:
-                Quartz.CGContextSetRGBFillColor(ctx, 0.10, 0.10, 0.10, 0.60)
-            Quartz.CGContextFillPath(ctx)
-
-            _rounded_rect_path(ctx, rect, corner)
-            if highlighted:
-                Quartz.CGContextSetRGBStrokeColor(ctx, 0.53, 1.0, 0.0, 1.0)
-                Quartz.CGContextSetLineWidth(ctx, 2.0)
-            else:
-                Quartz.CGContextSetRGBStrokeColor(
-                    ctx, 0.45, 0.45, 0.45, 0.90 if sub_armed else 0.55
-                )
-                Quartz.CGContextSetLineWidth(ctx, 1.0)
-            Quartz.CGContextStrokePath(ctx)
-
-            color = (
                 AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.60, 1.0, 0.20, 1.0)
                 if highlighted
-                else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                    0.92, 0.92, 0.92, 0.95 if sub_armed else 0.70
-                )
+                else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.92, 0.92, 0.92, 0.95)
             )
-            _draw_label(sub_name, cx, cy, color, highlighted)
-
-    def _rounded_rect_path(ctx: Any, rect: Any, radius: float) -> None:
-        x = rect.origin.x
-        y = rect.origin.y
-        w = rect.size.width
-        h = rect.size.height
-        r = min(radius, w / 2, h / 2)
-        Quartz.CGContextBeginPath(ctx)
-        Quartz.CGContextMoveToPoint(ctx, x + r, y)
-        Quartz.CGContextAddLineToPoint(ctx, x + w - r, y)
-        Quartz.CGContextAddArcToPoint(ctx, x + w, y, x + w, y + r, r)
-        Quartz.CGContextAddLineToPoint(ctx, x + w, y + h - r)
-        Quartz.CGContextAddArcToPoint(ctx, x + w, y + h, x + w - r, y + h, r)
-        Quartz.CGContextAddLineToPoint(ctx, x + r, y + h)
-        Quartz.CGContextAddArcToPoint(ctx, x, y + h, x, y + h - r, r)
-        Quartz.CGContextAddLineToPoint(ctx, x, y + r)
-        Quartz.CGContextAddArcToPoint(ctx, x, y, x + r, y, r)
-        Quartz.CGContextClosePath(ctx)
+            _draw_label(name, lx, ly, color, highlighted)
 
     def _draw_label(text: str, cx: float, cy: float, color: Any, bold: bool) -> None:
         attrs = {
