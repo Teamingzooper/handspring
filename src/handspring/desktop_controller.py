@@ -357,14 +357,15 @@ class DesktopController:
     def radial_state(
         self,
     ) -> tuple[tuple[float, float], tuple[float, float], int | None, int | None, float] | None:
+        """Return (origin, cur, hovered_root, hovered_sub, progress) for the overlay.
+
+        progress is always 1.0 in the flick model — kept in the tuple for
+        payload compatibility. hovered_sub is always None.
+        """
         r = self._radial
         if not r.pinching:
             return None
-        hold = self._cfg().radial.hold_seconds
-        progress = min(1.0, (self._last_now - r.pinch_start) / max(1e-6, hold))
-        if not r.active and progress < 0.05:
-            return None
-        return r.origin, r.cur, r.hovered_root, r.hovered_sub, progress
+        return r.origin, r.cur, r.hovered_root, None, 1.0
 
     def radial_apps(self) -> tuple[str, ...]:
         for it in self._cfg().radial_tree:
@@ -425,8 +426,13 @@ class DesktopController:
         )
 
         if not pinching:
-            if r.pinching and r.active:
-                self._commit_radial(r.hovered_root, r.hovered_sub)
+            # Release — if something was highlighted and we flicked far enough,
+            # commit it. Otherwise cancel cleanly.
+            if r.pinching and r.hovered_root is not None:
+                dx = r.cur[0] - r.origin[0]
+                dy = r.cur[1] - r.origin[1]
+                if (dx * dx + dy * dy) ** 0.5 >= cfg.radial.flick_threshold:
+                    self._commit_radial(r.hovered_root, None)
             r.pinching = False
             r.active = False
             r.hovered_root = None
@@ -439,9 +445,10 @@ class DesktopController:
         cy = (f.index_y + f.thumb_y) * 0.5
 
         if not r.pinching:
+            # Instant: menu is active from frame zero.
             r.pinching = True
             r.pinch_start = now
-            r.active = False
+            r.active = True
             r.origin = (cx, cy)
             r.cur = (cx, cy)
             r.hovered_root = None
@@ -449,59 +456,39 @@ class DesktopController:
             return
 
         r.cur = (cx, cy)
-        if not r.active and (now - r.pinch_start) >= cfg.radial.hold_seconds:
-            r.active = True
+        r.active = True
 
-        if not r.active:
+        n_roots = len(tree)
+        if n_roots == 0:
             return
 
         dx = cx - r.origin[0]
         dy = cy - r.origin[1]
         dist = (dx * dx + dy * dy) ** 0.5
 
-        if dist < cfg.radial.inner_radius:
+        # Dead zone: hand still at origin, nothing highlighted.
+        if dist < cfg.radial.flick_threshold * 0.5:
             r.hovered_root = None
-            r.hovered_sub = None
             return
 
-        n_roots = len(tree)
-        if n_roots == 0:
+        # Angular hysteresis: once a slice is highlighted, neighbors have to
+        # exceed the slice's expanded angular range to take over.
+        import math
+        new_idx = self._slice_index(dx, dy, n_roots)
+        if r.hovered_root is None:
+            r.hovered_root = new_idx
             return
-
-        if dist < cfg.radial.sub_threshold:
-            r.hovered_root = self._slice_index(dx, dy, n_roots)
-            r.hovered_sub = None
-            return
-
-        # Past the sub threshold: lock the root and lay out a horizontal row
-        # of chips next to the slice tip. Pick the chip nearest the hand's
-        # horizontal screen position. Layout auto-flips direction and clamps
-        # to stay onscreen.
-        if r.hovered_root is None or r.hovered_root >= n_roots:
-            r.hovered_root = self._slice_index(dx, dy, n_roots)
-        subs = tree[r.hovered_root].subs
-        if not subs:
-            r.hovered_sub = None
-            return
-        origin_screen = self._cam_to_screen_point(r.origin[0], r.origin[1])
-        centers, _tip, _dir = compute_sub_layout(
-            origin_screen,
-            r.hovered_root,
-            n_roots,
-            len(subs),
-            self._screen_w,
-            self._screen_h,
-            mirrored=self._mirrored,
-        )
-        hs = self._left_cursor_screen
-        if hs is None or not centers:
-            if r.hovered_sub is None:
-                r.hovered_sub = 0
-            return
-        # Nearest chip by horizontal distance.
-        hand_x = hs[0]
-        best = min(range(len(centers)), key=lambda i: abs(centers[i][0] - hand_x))
-        r.hovered_sub = best
+        slice_size = 2 * math.pi / n_roots
+        cur_center_cw = r.hovered_root * slice_size  # clockwise from up
+        # angle clockwise-from-up for the current hand.
+        angle = math.atan2(dy, dx)
+        if self._mirrored:
+            angle = math.atan2(dy, -dx)
+        cw = (angle + math.pi / 2) % (2 * math.pi)
+        delta = ((cw - cur_center_cw + math.pi) % (2 * math.pi)) - math.pi
+        half = slice_size / 2 * (1 + cfg.radial.angular_hysteresis)
+        if abs(delta) > half:
+            r.hovered_root = new_idx
 
     def _commit_radial(self, root_idx: int | None, sub_idx: int | None) -> None:
         if root_idx is None:

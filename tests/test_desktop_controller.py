@@ -587,3 +587,65 @@ def test_desktops_right_switches_right():
         subs = c.root_items()[_find_root(c, "Desktops")][1]
         c._commit_radial(_find_root(c, "Desktops"), subs.index("Right"))  # type: ignore[attr-defined]
         s.assert_called_once_with("right")
+
+
+def test_flick_commit_fires_on_release_with_direction():
+    """Pinch → tiny move in a direction → release fires that slice's command."""
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.mission_control") as mc,
+    ):
+        # Find Mission's slice index from the tree.
+        items = c.root_items()
+        mission_idx = next(i for i, (n, _) in enumerate(items) if n == "Mission")
+        import math
+        slice_size = 2 * math.pi / len(items)
+        bisector = -math.pi / 2 + mission_idx * slice_size
+        ux, uy = math.cos(bisector), math.sin(bisector)
+
+        ox, oy = 0.3, 0.5
+        # Frame 1: pinch at origin.
+        c.update(_frame(_hand("open", ox, oy, pinch=0.95), _absent()), now=0.0)
+        # Frame 2: move past flick_threshold (0.03) along Mission's bisector.
+        c.update(
+            _frame(_hand("open", ox + ux * 0.05, oy + uy * 0.05, pinch=0.95), _absent()),
+            now=0.05,
+        )
+        # Frame 3: release pinch → fire.
+        c.update(
+            _frame(_hand("open", ox + ux * 0.05, oy + uy * 0.05, pinch=0.1), _absent()),
+            now=0.10,
+        )
+        mc.assert_called_once()
+
+
+def test_flick_cancels_when_released_at_origin():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.mission_control") as mc,
+    ):
+        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.0)
+        # Tiny jitter, well inside flick_threshold.
+        c.update(_frame(_hand("open", 0.305, 0.502, pinch=0.95), _absent()), now=0.05)
+        c.update(_frame(_hand("open", 0.305, 0.502, pinch=0.1), _absent()), now=0.10)
+        mc.assert_not_called()
+
+
+def test_flick_no_hold_required_menu_is_instant():
+    """radial_state returns a payload on the very first pinching frame —
+    no 0.4s dwell."""
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+    ):
+        c.update(_frame(_hand("open", 0.3, 0.5, pinch=0.95), _absent()), now=0.0)
+        state = c.radial_state()
+        assert state is not None
