@@ -23,7 +23,8 @@ MediaPipe does the landmark extraction; everything downstream is pure Python. Ru
 8. [Customizing](#customizing)
 9. [CLI reference](#cli-reference)
 10. [Architecture](#architecture)
-11. [Troubleshooting](#troubleshooting)
+11. [Use as a library](#use-as-a-library)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -208,56 +209,85 @@ Both entry points emit OSC to `127.0.0.1:9000` by default (override with `--host
 
 ## Customizing
 
-All of the customization points are constants in the source — no config files. Restart after editing. The most common knobs:
+Handspring reads its settings from a TOML file at `~/.config/handspring/config.toml` (override with `--config PATH`). The file is auto-created with defaults on first run. Two ways to edit:
 
-### Cursor / control feel
+1. **In the browser:** pinch-and-hold left hand → rotate to **More** → release on **Settings**. Your default browser opens `http://127.0.0.1:8766/` with sliders for every knob plus a drag-and-drop editor for the radial tree. Saving applies instantly.
+2. **In your editor:** edit the TOML directly. A background watcher picks up file changes within ~1 second — no restart needed.
 
-`src/handspring/desktop_controller.py`:
+Both paths write through the same config, so you can freely mix them.
 
-```python
-_CURSOR_SMOOTHING = 0.35        # EMA; higher = snappier, lower = smoother
-_CURSOR_INSET = 0.08            # camera dead zone at each edge
-_RADIAL_HOLD_SECONDS = 0.4      # pinch-and-hold before wheel opens
-_RADIAL_INNER = 0.03            # center dead zone (camera space)
-_RADIAL_SUB_THRESHOLD = 0.10    # root → sub ring crossover
-_FAILSAFE_HOLD_SECONDS = 5.0    # both-fist-to-disable duration
-_SCROLL_DEADZONE = 0.12         # middle band that doesn't scroll
-_SCROLL_MAX_PIXELS = 30         # per-frame scroll delta at screen edges
+### What's in the config
+
+```toml
+[cursor]
+smoothing     = 0.35   # EMA — higher = snappier, lower = smoother
+inset         = 0.08   # camera dead zone at each edge
+
+[radial]
+hold_seconds  = 0.4    # pinch-hold before wheel opens
+inner_radius  = 0.03   # dead zone
+sub_threshold = 0.10   # root → sub-ring crossover
+
+[scroll]
+deadzone      = 0.12
+max_pixels    = 30
+
+[create]
+entry_distance = 0.08
+min_diagonal   = 0.15
+
+[failsafe]
+hold_seconds  = 5.0    # both-fist hold to toggle gestures
+
+[overlay]
+enabled       = true
+scale         = 1.0
+
+[colors]
+radial_highlight = [136, 255, 0]
+radial_outline   = [200, 200, 200]
+cursor_dot       = [136, 255, 0]
+
+[features]
+tiling          = true
+spaces          = true
+mission_control = true
+screenshots     = true
+
+[server]
+web_port       = 8765
+settings_port  = 8766
 ```
 
-### Apps in the Create sub-ring
+### Radial tree
 
-`src/handspring/desktop_controller.py`:
+The tree is an ordered list of `[[radial_tree]]` entries. Clockwise from top. Each entry has a name, a list of sub-slices, and an optional shell `command` for user-defined leaves.
 
-```python
-_RADIAL_APPS: tuple[str, ...] = (
-    "Finder", "Safari", "Messages", "Notes", "Terminal", "Music",
-)
+```toml
+[[radial_tree]]
+name = "None"
+subs = []
+
+[[radial_tree]]
+name = "Create"
+subs = ["Finder", "Safari", "Messages", "Notes", "Terminal", "Music"]
+
+# ... built-ins: Window, Scroll, Mission, Desktops, Screenshot, More ...
+
+# A user-added leaf with a custom command. No subs, so it fires on release.
+[[radial_tree]]
+name    = "Slack"
+subs    = []
+command = "open -a Slack"
 ```
 
-Any string that `open -a <Name>` accepts works (e.g. `"Google Chrome"`, `"Visual Studio Code"`, `"Cursor"`).
+Built-in root names still trigger their built-in behavior (`Create`, `Window`, `Screenshot`, `Mission`, `Desktops`, `Scroll`, `More`, `None`). Anything else with a `command` runs the command in the background.
 
-### Root radial layout
+Any string that `open -a <Name>` accepts works in the `Create` sub-ring (e.g. `"Google Chrome"`, `"Visual Studio Code"`, `"Cursor"`).
 
-Edit `_ROOT_ITEMS` in `desktop_controller.py` to reorder slices, add new ones, or remove existing items. Order matters — it's clockwise from top.
+### Disabling the settings UI
 
-```python
-_ROOT_ITEMS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("None", ()),
-    ("Create", _RADIAL_APPS),
-    ("Window", _WINDOW_SUBS),
-    ("Scroll", ()),
-    ("Mission", ()),
-    ("Desktops", _DESKTOP_SUBS),
-    ("Screenshot", _SCREENSHOT_SUBS),
-)
-```
-
-Adding a new root item:
-
-1. Append to `_ROOT_ITEMS` with its name + sub tuple (empty tuple for leaf actions).
-2. Add an `elif name == "YourName"` branch to `_commit_radial`.
-3. If it needs an OS action, add a helper to `os_control.py`.
+Pass `--no-settings` to skip the settings server entirely. You can still hand-edit the TOML.
 
 ### Overlay visuals
 
@@ -304,6 +334,10 @@ python -m handspring [options]
   --no-os-control          disable cursor/click/radial (tracking + OSC only)
   --web-port PORT          MJPEG server port (default: 8765)
   --no-web                 disable the MJPEG web server
+  --settings-port PORT     settings UI port (default: 8766)
+  --no-settings            disable the settings web UI (radial → More → Settings)
+  --config PATH            override config.toml location
+                           (default: ~/.config/handspring/config.toml)
   --no-overlay             disable the native always-on-top overlay
   --fps-log-interval S     console FPS readout interval (default: 0.5)
 ```
@@ -352,19 +386,129 @@ FrameResult (dataclass, one per frame)
 - `os_control.py` — macOS primitives. Each function is a guarded no-op on non-macOS.
 - `overlay.py` — transparent click-through NSWindow rendered from the main loop via event-pump. Level = NSPopUpMenuWindowLevel (above most apps, below menubar).
 - `web_server.py` — stdlib `http.server` with MJPEG `multipart/x-mixed-replace` streaming from a shared `LatestFrame`.
+- `config.py` — typed dataclass `Config`, TOML load/save, thread-safe `ConfigStore`, mtime-poll file watcher. Read-through snapshots; no half-written state.
+- `settings_server.py` — separate HTTP server serving the settings SPA (`GET /`, `GET /api/config`, `POST /api/config`, `POST /api/reload`). Opened from the radial via "More → Settings".
 - `jarvis.py` — the old internal-windows system. Not wired into the current desktop entry point, but the gesture detection logic is reused as a reference. Still used by the OSC emitter's `/jarvis/*` addresses for external consumers.
 - `synth.py`, `synth_params.py`, `synth_ui.py` — audio engine, thread-safe parameter container, gesture → param mapping.
 
 ### Testing
 
 ```bash
-pytest              # 163 tests
+pytest              # 183 tests
 ruff check src/ tests/
 ruff format src/ tests/
 mypy src/
 ```
 
 Tests mock `os_control.*` so they don't actually drive your OS. The tracker/MediaPipe path is bypassed in tests via synthetic `FrameResult` fixtures.
+
+---
+
+## Use as a library
+
+Handspring ships with two CLIs (`handspring`, `handspring-synth`), but the package is also importable. Use it to add gesture input to your own Python app — creative coding, accessibility tools, performance art, whatever.
+
+### Minimal event loop
+
+The core of handspring is a `Tracker` that turns camera frames into a typed `FrameResult`. Everything else (OSC, desktop control, overlay, synth) is an optional consumer of that result.
+
+```python
+import cv2, time
+from handspring.tracker import Tracker, TrackerConfig
+
+cap = cv2.VideoCapture(0)
+tracker = Tracker(TrackerConfig(max_hands=2, track_face=False, track_pose=False))
+
+try:
+    while True:
+        ok, bgr = cap.read()
+        if not ok:
+            time.sleep(0.01); continue
+        out = tracker.process(bgr)
+        frame = out.frame                    # handspring.types.FrameResult
+        if frame.right.present and frame.right.gesture == "pinch":
+            print("pinch!", frame.right.features.index_x, frame.right.features.index_y)
+finally:
+    cap.release(); tracker.close()
+```
+
+### Reacting to gestures in your own code
+
+`FrameResult` is a plain dataclass — no callbacks required. Read `left` / `right` / `face` / `pose` fields each frame and drive whatever you like (MIDI, websockets, game input, etc.).
+
+```python
+from handspring.features import is_pinching
+from handspring.motion import WaveDetector
+
+waves = WaveDetector()
+# ...
+if is_pinching(frame.right):
+    send_midi_note(60)
+if waves.update(frame.left, now=time.monotonic()):
+    my_app.on_wave()
+```
+
+### Reusing the state machine + config
+
+If you want the full desktop gesture vocabulary (radial menu, tiling, etc.) without the CLI wrapper, construct the controller directly and pass callbacks for the "More" actions:
+
+```python
+from handspring.config import ConfigStore, start_watcher
+from handspring.desktop_controller import DesktopController
+from handspring.settings_server import SettingsServer
+import webbrowser
+
+store = ConfigStore()                         # ~/.config/handspring/config.toml
+watcher = start_watcher(store)                # live reload on file edits
+settings = SettingsServer(store, port=8766); settings.start()
+
+desktop = DesktopController(
+    mirrored=True,
+    store=store,
+    on_open_settings=lambda: webbrowser.open(settings.url),
+    on_reload_config=store.reload,
+    on_quit=my_shutdown,
+)
+
+# In your frame loop:
+desktop.update(frame, now=time.monotonic())
+for event in desktop.pop_events():            # "click_down", "mode:scroll", "run:Slack", ...
+    my_app.on_event(event)
+```
+
+### Subscribing to config changes
+
+The `ConfigStore` fires a callback whenever the config is swapped (from the UI, from a hand-edit, or from `store.set()`):
+
+```python
+store.on_change(lambda cfg: print("new radial tree:", [i.name for i in cfg.radial_tree]))
+```
+
+### Threading notes
+
+- The tracker is **not** thread-safe — call `process()` from one thread.
+- `ConfigStore`, `WebServer`, `SettingsServer`, and `_MtimeWatcher` all spawn their own daemon threads and are safe to read from any thread.
+- The overlay (`handspring.overlay.Overlay`) must be driven from the main thread on macOS because AppKit requires it; pump events each frame via `overlay_inst.pump()`.
+
+### Public surface
+
+Importable names with stable semantics:
+
+```python
+from handspring import __version__
+from handspring.tracker     import Tracker, TrackerConfig
+from handspring.types       import FrameResult, HandResult, HandFeatures
+from handspring.features    import is_pinching, hand_features, face_features
+from handspring.gestures    import classify_hand
+from handspring.motion      import WaveDetector, ClapDetector
+from handspring.osc_out     import OscEmitter
+from handspring.config      import Config, ConfigStore, RadialItem, load, save, start_watcher
+from handspring.desktop_controller import DesktopController
+from handspring.settings_server    import SettingsServer
+from handspring.web_server         import WebServer, LatestFrame
+```
+
+Anything prefixed with `_` is internal. Semver applies from v1.0 onward.
 
 ---
 

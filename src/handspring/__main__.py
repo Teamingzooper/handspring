@@ -20,6 +20,7 @@ import argparse
 import signal
 import sys
 import time
+import webbrowser
 from types import FrameType
 
 import cv2
@@ -27,9 +28,11 @@ import numpy as np
 from numpy.typing import NDArray
 
 from handspring import __version__, os_control, overlay
+from handspring.config import ConfigStore, start_watcher
 from handspring.desktop_controller import DesktopController
 from handspring.osc_out import OscEmitter
 from handspring.preview import Preview
+from handspring.settings_server import SettingsServer
 from handspring.tracker import Tracker, TrackerConfig
 from handspring.types import FrameResult
 from handspring.web_server import LatestFrame, WebServer
@@ -61,6 +64,23 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--web-port", type=int, default=8765, help="web stream port (default: 8765)")
     p.add_argument("--no-web", action="store_true", help="disable the MJPEG web server")
+    p.add_argument(
+        "--settings-port",
+        type=int,
+        default=8766,
+        help="settings UI port (default: 8766)",
+    )
+    p.add_argument(
+        "--no-settings",
+        action="store_true",
+        help="disable the settings web UI (radial → More → Settings)",
+    )
+    p.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="override path to config.toml (default: ~/.config/handspring/config.toml)",
+    )
     p.add_argument(
         "--no-overlay",
         dest="overlay",
@@ -96,6 +116,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: could not open camera {args.camera}", file=sys.stderr)
         return 2
 
+    from pathlib import Path
+
+    config_path = Path(args.config).expanduser() if args.config else None
+    store = ConfigStore(path=config_path)
+    watcher = start_watcher(store)
+
+    settings_server: SettingsServer | None = None
+    if not args.no_settings:
+        settings_server = SettingsServer(store, port=args.settings_port)
+        settings_server.start()
+
+    shutdown = _Shutdown()
+
+    def _open_settings() -> None:
+        if settings_server is not None:
+            webbrowser.open(settings_server.url)
+
+    def _reload_config() -> None:
+        store.reload()
+
+    def _quit() -> None:
+        shutdown.requested = True
+
     tracker = Tracker(
         TrackerConfig(
             max_hands=args.hands,
@@ -104,7 +147,17 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     emitter = OscEmitter(host=args.host, port=args.port)
-    desktop = DesktopController(mirrored=args.mirror) if args.os_control else None
+    desktop = (
+        DesktopController(
+            mirrored=args.mirror,
+            store=store,
+            on_open_settings=_open_settings,
+            on_reload_config=_reload_config,
+            on_quit=_quit,
+        )
+        if args.os_control
+        else None
+    )
 
     preview = Preview(mirror=args.mirror, show_window=not args.no_preview)
 
@@ -121,13 +174,14 @@ def main(argv: list[str] | None = None) -> int:
         if not overlay_inst.start():
             overlay_inst = None
 
-    shutdown = _Shutdown()
-
     print(f"handspring {__version__}", flush=True)
     print(f"camera: {args.camera}", flush=True)
     print(f"OSC:    {args.host}:{args.port}", flush=True)
     if web is not None:
         print(f"web:    http://127.0.0.1:{args.web_port}/  (Plash-ready)", flush=True)
+    if settings_server is not None:
+        print(f"settings: {settings_server.url}  (radial → More → Settings)", flush=True)
+    print(f"config: {store.path}", flush=True)
     if args.os_control:
         if os_control.available():
             sw, sh = os_control.screen_size()
@@ -234,6 +288,9 @@ def main(argv: list[str] | None = None) -> int:
         preview.close()
         if web is not None:
             web.stop()
+        if settings_server is not None:
+            settings_server.stop()
+        watcher.stop()
         if overlay_inst is not None:
             overlay_inst.stop()
         cv2.destroyAllWindows()
@@ -249,13 +306,12 @@ def _cam_to_screen(
     mirrored: bool,
 ) -> tuple[int, int]:
     """Apply the same mirror + inset mapping the cursor uses."""
-    from handspring.desktop_controller import _CURSOR_INSET  # local to avoid reimport
-
+    inset = desktop.store.get().cursor.inset
     nx = 1.0 - cam_x if mirrored else cam_x
     ny = cam_y
-    span = 1.0 - 2 * _CURSOR_INSET
-    mx = (nx - _CURSOR_INSET) / span
-    my = (ny - _CURSOR_INSET) / span
+    span = max(1e-6, 1.0 - 2 * inset)
+    mx = (nx - inset) / span
+    my = (ny - inset) / span
     sw = desktop._screen_w  # noqa: SLF001
     sh = desktop._screen_h  # noqa: SLF001
     sx = max(0, min(sw - 1, int(mx * sw)))
