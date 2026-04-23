@@ -381,19 +381,31 @@ class DesktopController:
             r.hovered_sub = None
             return
 
-        # Past the sub threshold: lock the root (no more angular root swaps)
-        # and pick the sub by how far past the threshold we are. This lets
-        # the user keep pushing in the same direction they already went —
-        # no wrist rotation needed.
+        # Past the sub threshold: lock the root and spawn a small second
+        # pinwheel centered at the slice's outer tip. Picking a sub is a
+        # short angular move around *that* tip, not around the main origin —
+        # small, nearby angular motion instead of a big sweep.
+        import math
+
         if r.hovered_root is None or r.hovered_root >= n_roots:
             r.hovered_root = self._slice_index(dx, dy, n_roots)
         subs = tree[r.hovered_root].subs
-        if subs:
-            past = dist - cfg.radial.sub_threshold
-            idx = int(past / max(1e-6, cfg.radial.chip_spacing))
-            r.hovered_sub = max(0, min(len(subs) - 1, idx))
-        else:
+        if not subs:
             r.hovered_sub = None
+            return
+        slice_size = 2 * math.pi / n_roots
+        bisector = -math.pi / 2 + r.hovered_root * slice_size
+        tip_x = r.origin[0] + cfg.radial.sub_threshold * math.cos(bisector)
+        tip_y = r.origin[1] + cfg.radial.sub_threshold * math.sin(bisector)
+        mdx = cx - tip_x
+        mdy = cy - tip_y
+        if (mdx * mdx + mdy * mdy) ** 0.5 < cfg.radial.sub_mini_inner:
+            # Inside the mini-ring's dead zone — don't change the sub.
+            if r.hovered_sub is None:
+                # Nothing picked yet: default to the first chip.
+                r.hovered_sub = 0
+            return
+        r.hovered_sub = self._slice_index(mdx, mdy, len(subs))
 
     def _commit_radial(self, root_idx: int | None, sub_idx: int | None) -> None:
         if root_idx is None:

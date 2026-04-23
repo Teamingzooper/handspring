@@ -474,27 +474,28 @@ def test_radial_root_locks_when_hand_enters_sub_ring():
         assert c._radial.hovered_sub is None  # type: ignore[attr-defined]
 
 
-def test_radial_sub_selection_is_distance_based():
-    """Pushing further past sub_threshold advances to the next chip.
+def test_radial_sub_selected_by_angle_around_slice_tip():
+    """Sub pick is a small angular move around the hovered slice's tip.
 
-    No angular rotation is needed — only radial distance matters once the
-    root has been picked.
+    The mini-pinwheel is centered at the slice tip (sub_threshold along the
+    slice bisector from the main origin). Moving clockwise/counter-clockwise
+    from straight out picks neighboring subs.
     """
     import math
 
     c = DesktopController(mirrored=False)
-    # Pick any root with subs; derive its bisector direction from the tree.
     items = c.root_items()
     root_idx = next(i for i, (_, subs) in enumerate(items) if len(subs) >= 3)
     subs = items[root_idx][1]
-    slice_size = 2 * math.pi / len(items)
+    n_roots = len(items)
+    slice_size = 2 * math.pi / n_roots
     bisector = -math.pi / 2 + root_idx * slice_size
     ux, uy = math.cos(bisector), math.sin(bisector)
+    # Perpendicular to the bisector (for sideways nudges around the tip).
+    px, py = -uy, ux
 
     origin_x, origin_y = 0.3, 0.5
-
-    def at(dist: float) -> tuple[float, float]:
-        return (origin_x + ux * dist, origin_y + uy * dist)
+    sub_threshold = c.store.get().radial.sub_threshold
 
     with (
         patch("handspring.desktop_controller.os_control.move_cursor"),
@@ -504,21 +505,28 @@ def test_radial_sub_selection_is_distance_based():
         c.update(_frame(_hand("open", origin_x, origin_y, pinch=0.95), _absent()), now=0.0)
         c.update(_frame(_hand("open", origin_x, origin_y, pinch=0.95), _absent()), now=0.5)
         # Enter root ring along the bisector.
-        x, y = at(0.05)
-        c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.55)
+        c.update(
+            _frame(_hand("open", origin_x + ux * 0.05, origin_y + uy * 0.05, pinch=0.95), _absent()),
+            now=0.55,
+        )
         assert c._radial.hovered_root == root_idx  # type: ignore[attr-defined]
-        # Just past sub_threshold (0.10): chip 0.
-        x, y = at(0.11)
-        c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.6)
-        assert c._radial.hovered_sub == 0  # type: ignore[attr-defined]
-        # +1 chip_spacing (0.035): chip 1.
-        x, y = at(0.10 + 0.04)
+        # Land at the slice tip (past sub_threshold by a bit). Picks the
+        # sub that points "straight out" — the center sub (top of mini ring).
+        tip_dist = sub_threshold + 0.06
+        x, y = origin_x + ux * tip_dist, origin_y + uy * tip_dist
+        c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.60)
+        straight_out = c._radial.hovered_sub  # type: ignore[attr-defined]
+        assert straight_out is not None
+        assert 0 <= straight_out < len(subs)
+        # Nudge perpendicular: different sub.
+        x, y = (
+            origin_x + ux * tip_dist + px * 0.06,
+            origin_y + uy * tip_dist + py * 0.06,
+        )
         c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.65)
-        assert c._radial.hovered_sub == 1  # type: ignore[attr-defined]
-        # Very far out: clamp to last chip.
-        x, y = at(0.60)
-        c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.70)
-        assert c._radial.hovered_sub == len(subs) - 1  # type: ignore[attr-defined]
+        nudged = c._radial.hovered_sub  # type: ignore[attr-defined]
+        assert nudged != straight_out
+        assert 0 <= nudged < len(subs)
 
 
 # ---------------------------------------------------------------------------

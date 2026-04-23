@@ -58,10 +58,10 @@ class RadialConfig:
     hold_seconds: float = 0.4
     inner_radius: float = 0.03
     sub_threshold: float = 0.10
-    # Camera-space distance between successive chips along the slice bisector.
-    # After crossing `sub_threshold`, every `chip_spacing` further outward
-    # advances to the next sub. Smaller = less hand travel per chip.
-    chip_spacing: float = 0.035
+    # Dead zone around the mini sub-pinwheel's center. The sub-ring is
+    # anchored at the hovered slice's outer tip; the hand must be at least
+    # this far (camera-space) from that tip for a sub to register.
+    sub_mini_inner: float = 0.02
 
 
 @dataclass(frozen=True)
