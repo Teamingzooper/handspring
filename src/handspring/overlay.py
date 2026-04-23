@@ -175,8 +175,6 @@ if _AVAILABLE:
     ) -> None:
         r_inner = 40.0  # center dead-zone visual
         r_root = 220.0  # outer radius of root ring
-        r_sub_inner = 235.0  # gap between root and sub
-        r_sub = 410.0  # outer radius of sub ring
 
         # During the hold countdown, show ONLY a thin filling arc — no slices.
         if progress < 1.0:
@@ -224,54 +222,93 @@ if _AVAILABLE:
             )
             _draw_label(name, lx, ly, color, highlighted)
 
-        # --- Sub ring: shown whenever hovered_root has children ---
+        # --- Sub chips: flyout along the hovered slice's bisector ---
+        # Each chip is a rounded rectangle centered at a radius that grows
+        # outward. Picking a chip = pushing the hand further along the same
+        # direction used to pick the root. No wrist rotation needed.
         if hovered_root is None:
             return
         _name, subs = root_items[hovered_root]
         if not subs:
             return
-        m = len(subs)
-        sub_slice = 2 * math.pi / m
-        # Hand has pushed out far enough = sub is actively "armed".
+        _draw_sub_chips(ctx, ox, oy, hovered_root, hovered_sub, subs, len(root_items))
+
+    def _draw_sub_chips(
+        ctx: Any,
+        ox: float,
+        oy: float,
+        hovered_root: int,
+        hovered_sub: int | None,
+        subs: tuple[str, ...],
+        n_roots: int,
+    ) -> None:
+        r_root = 220.0
+        chip_gap = 90.0          # screen px between chip centers along the bisector
+        first_chip_r = r_root + 70.0
+        chip_w = 150.0
+        chip_h = 56.0
+        corner = 14.0
+
+        slice_size = 2 * math.pi / n_roots
+        bisector = -math.pi / 2 + hovered_root * slice_size
+        dx = math.cos(bisector)
+        dy = math.sin(bisector)
+
         sub_armed = hovered_sub is not None
         for j, sub_name in enumerate(subs):
-            start = -math.pi / 2 + (j - 0.5) * sub_slice
-            end = start + sub_slice
-            sub_highlighted = j == hovered_sub
-            _pie_wedge_path(ctx, ox, oy, r_sub_inner, r_sub, start, end)
-            if sub_highlighted:
-                # Bright green fill for the active sub selection.
-                Quartz.CGContextSetRGBFillColor(ctx, 0.28, 0.50, 0.10, 0.90)
+            r = first_chip_r + j * chip_gap
+            cx = ox + r * dx
+            cy = oy + r * dy
+            highlighted = j == hovered_sub
+
+            # Rounded rect.
+            rect = Quartz.CGRectMake(cx - chip_w / 2, cy - chip_h / 2, chip_w, chip_h)
+            _rounded_rect_path(ctx, rect, corner)
+            if highlighted:
+                Quartz.CGContextSetRGBFillColor(ctx, 0.28, 0.50, 0.10, 0.92)
             elif sub_armed:
-                Quartz.CGContextSetRGBFillColor(ctx, 0.14, 0.14, 0.14, 0.70)
+                Quartz.CGContextSetRGBFillColor(ctx, 0.12, 0.12, 0.12, 0.80)
             else:
-                # Preview — user is still in the root ring, but sub is shown
-                # so they know it's available. Low-opacity so it reads as
-                # "peripheral".
-                Quartz.CGContextSetRGBFillColor(ctx, 0.10, 0.10, 0.10, 0.45)
+                Quartz.CGContextSetRGBFillColor(ctx, 0.10, 0.10, 0.10, 0.55)
             Quartz.CGContextFillPath(ctx)
-            _pie_wedge_path(ctx, ox, oy, r_sub_inner, r_sub, start, end)
-            if sub_highlighted:
+
+            _rounded_rect_path(ctx, rect, corner)
+            if highlighted:
                 Quartz.CGContextSetRGBStrokeColor(ctx, 0.53, 1.0, 0.0, 1.0)
-                Quartz.CGContextSetLineWidth(ctx, 1.5)
+                Quartz.CGContextSetLineWidth(ctx, 2.0)
             else:
                 Quartz.CGContextSetRGBStrokeColor(
-                    ctx, 0.40, 0.40, 0.40, 0.85 if sub_armed else 0.55
+                    ctx, 0.45, 0.45, 0.45, 0.90 if sub_armed else 0.55
                 )
                 Quartz.CGContextSetLineWidth(ctx, 1.0)
             Quartz.CGContextStrokePath(ctx)
-            center_angle = -math.pi / 2 + j * sub_slice
-            slr = (r_sub_inner + r_sub) * 0.5
-            slx = ox + slr * math.cos(center_angle)
-            sly = oy + slr * math.sin(center_angle)
+
             color = (
                 AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.60, 1.0, 0.20, 1.0)
-                if sub_highlighted
+                if highlighted
                 else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                    0.85, 0.85, 0.85, 0.95 if sub_armed else 0.65
+                    0.92, 0.92, 0.92, 0.95 if sub_armed else 0.70
                 )
             )
-            _draw_label(sub_name, slx, sly, color, sub_highlighted)
+            _draw_label(sub_name, cx, cy, color, highlighted)
+
+    def _rounded_rect_path(ctx: Any, rect: Any, radius: float) -> None:
+        x = rect.origin.x
+        y = rect.origin.y
+        w = rect.size.width
+        h = rect.size.height
+        r = min(radius, w / 2, h / 2)
+        Quartz.CGContextBeginPath(ctx)
+        Quartz.CGContextMoveToPoint(ctx, x + r, y)
+        Quartz.CGContextAddLineToPoint(ctx, x + w - r, y)
+        Quartz.CGContextAddArcToPoint(ctx, x + w, y, x + w, y + r, r)
+        Quartz.CGContextAddLineToPoint(ctx, x + w, y + h - r)
+        Quartz.CGContextAddArcToPoint(ctx, x + w, y + h, x + w - r, y + h, r)
+        Quartz.CGContextAddLineToPoint(ctx, x + r, y + h)
+        Quartz.CGContextAddArcToPoint(ctx, x, y + h, x, y + h - r, r)
+        Quartz.CGContextAddLineToPoint(ctx, x, y + r)
+        Quartz.CGContextAddArcToPoint(ctx, x, y, x + r, y, r)
+        Quartz.CGContextClosePath(ctx)
 
     def _draw_label(text: str, cx: float, cy: float, color: Any, bold: bool) -> None:
         attrs = {

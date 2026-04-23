@@ -381,11 +381,17 @@ class DesktopController:
             r.hovered_sub = None
             return
 
+        # Past the sub threshold: lock the root (no more angular root swaps)
+        # and pick the sub by how far past the threshold we are. This lets
+        # the user keep pushing in the same direction they already went —
+        # no wrist rotation needed.
         if r.hovered_root is None or r.hovered_root >= n_roots:
             r.hovered_root = self._slice_index(dx, dy, n_roots)
         subs = tree[r.hovered_root].subs
         if subs:
-            r.hovered_sub = self._slice_index(dx, dy, len(subs))
+            past = dist - cfg.radial.sub_threshold
+            idx = int(past / max(1e-6, cfg.radial.chip_spacing))
+            r.hovered_sub = max(0, min(len(subs) - 1, idx))
         else:
             r.hovered_sub = None
 

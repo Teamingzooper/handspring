@@ -474,6 +474,53 @@ def test_radial_root_locks_when_hand_enters_sub_ring():
         assert c._radial.hovered_sub is None  # type: ignore[attr-defined]
 
 
+def test_radial_sub_selection_is_distance_based():
+    """Pushing further past sub_threshold advances to the next chip.
+
+    No angular rotation is needed — only radial distance matters once the
+    root has been picked.
+    """
+    import math
+
+    c = DesktopController(mirrored=False)
+    # Pick any root with subs; derive its bisector direction from the tree.
+    items = c.root_items()
+    root_idx = next(i for i, (_, subs) in enumerate(items) if len(subs) >= 3)
+    subs = items[root_idx][1]
+    slice_size = 2 * math.pi / len(items)
+    bisector = -math.pi / 2 + root_idx * slice_size
+    ux, uy = math.cos(bisector), math.sin(bisector)
+
+    origin_x, origin_y = 0.3, 0.5
+
+    def at(dist: float) -> tuple[float, float]:
+        return (origin_x + ux * dist, origin_y + uy * dist)
+
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+    ):
+        c.update(_frame(_hand("open", origin_x, origin_y, pinch=0.95), _absent()), now=0.0)
+        c.update(_frame(_hand("open", origin_x, origin_y, pinch=0.95), _absent()), now=0.5)
+        # Enter root ring along the bisector.
+        x, y = at(0.05)
+        c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.55)
+        assert c._radial.hovered_root == root_idx  # type: ignore[attr-defined]
+        # Just past sub_threshold (0.10): chip 0.
+        x, y = at(0.11)
+        c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.6)
+        assert c._radial.hovered_sub == 0  # type: ignore[attr-defined]
+        # +1 chip_spacing (0.035): chip 1.
+        x, y = at(0.10 + 0.04)
+        c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.65)
+        assert c._radial.hovered_sub == 1  # type: ignore[attr-defined]
+        # Very far out: clamp to last chip.
+        x, y = at(0.60)
+        c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.70)
+        assert c._radial.hovered_sub == len(subs) - 1  # type: ignore[attr-defined]
+
+
 # ---------------------------------------------------------------------------
 # Window / Mission / Desktops commits
 # ---------------------------------------------------------------------------

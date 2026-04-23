@@ -58,6 +58,10 @@ class RadialConfig:
     hold_seconds: float = 0.4
     inner_radius: float = 0.03
     sub_threshold: float = 0.10
+    # Camera-space distance between successive chips along the slice bisector.
+    # After crossing `sub_threshold`, every `chip_spacing` further outward
+    # advances to the next sub. Smaller = less hand travel per chip.
+    chip_spacing: float = 0.035
 
 
 @dataclass(frozen=True)
