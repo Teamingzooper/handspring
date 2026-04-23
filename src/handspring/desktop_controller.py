@@ -33,6 +33,87 @@ from handspring.types import FrameResult, HandFeatures
 # value always comes from the config.
 _CURSOR_INSET = 0.08
 
+# Sub-chip row visual constants (screen pixels). Shared with the overlay so
+# selection and drawing can't drift.
+SUB_CHIP_W = 140
+SUB_CHIP_H = 50
+SUB_CHIP_GAP = 24
+SUB_CHIP_FIRST_GAP = 34  # gap between slice tip and first chip edge
+SUB_CHIP_MARGIN = 20     # minimum distance from screen edge
+ROOT_RING_PX = 220       # screen-space radius of the root ring (matches overlay)
+
+
+def compute_sub_layout(
+    origin_screen: tuple[int, int],
+    hovered_root: int,
+    n_roots: int,
+    n_subs: int,
+    screen_w: int,
+    screen_h: int,
+    *,
+    mirrored: bool,
+) -> tuple[list[tuple[int, int]], tuple[int, int], int]:
+    """Plan a horizontal row of sub chips next to the hovered slice's tip.
+
+    Returns (chip_centers, slice_tip, direction) all in screen pixels.
+    ``direction`` is -1 for leftward row, +1 for rightward.
+
+    Rules:
+    - Chips are always laid out horizontally (y is constant).
+    - Mostly-horizontal slices extend in their own direction.
+    - Near-vertical slices fall back to whichever side has more screen room.
+    - If the row would clip the screen edge, it slides back to stay inside.
+    """
+    import math
+
+    slice_size = 2 * math.pi / n_roots
+    bisector = -math.pi / 2 + hovered_root * slice_size
+    bx_cam = math.cos(bisector)
+    by_cam = math.sin(bisector)
+    screen_bx = -bx_cam if mirrored else bx_cam
+    tip_x = origin_screen[0] + int(ROOT_RING_PX * screen_bx)
+    tip_y = origin_screen[1] + int(ROOT_RING_PX * by_cam)
+    # Clamp tip to screen for sanity.
+    tip_y = max(SUB_CHIP_MARGIN + SUB_CHIP_H // 2, min(screen_h - SUB_CHIP_MARGIN - SUB_CHIP_H // 2, tip_y))
+
+    if screen_bx > 0.3:
+        direction = +1
+    elif screen_bx < -0.3:
+        direction = -1
+    else:
+        direction = +1 if tip_x < screen_w // 2 else -1
+
+    cx = tip_x + direction * (SUB_CHIP_FIRST_GAP + SUB_CHIP_W // 2)
+    centers: list[tuple[int, int]] = []
+    for _ in range(n_subs):
+        centers.append((cx, tip_y))
+        cx += direction * (SUB_CHIP_W + SUB_CHIP_GAP)
+
+    if not centers:
+        return centers, (tip_x, tip_y), direction
+
+    # Offscreen clamp: shift the whole row back into the screen if needed.
+    if direction > 0:
+        rightmost = centers[-1][0] + SUB_CHIP_W // 2
+        if rightmost > screen_w - SUB_CHIP_MARGIN:
+            shift = rightmost - (screen_w - SUB_CHIP_MARGIN)
+            centers = [(c[0] - shift, c[1]) for c in centers]
+        leftmost = centers[0][0] - SUB_CHIP_W // 2
+        if leftmost < SUB_CHIP_MARGIN:
+            shift = SUB_CHIP_MARGIN - leftmost
+            centers = [(c[0] + shift, c[1]) for c in centers]
+    else:
+        leftmost = centers[-1][0] - SUB_CHIP_W // 2
+        if leftmost < SUB_CHIP_MARGIN:
+            shift = SUB_CHIP_MARGIN - leftmost
+            centers = [(c[0] + shift, c[1]) for c in centers]
+        rightmost = centers[0][0] + SUB_CHIP_W // 2
+        if rightmost > screen_w - SUB_CHIP_MARGIN:
+            shift = rightmost - (screen_w - SUB_CHIP_MARGIN)
+            centers = [(c[0] - shift, c[1]) for c in centers]
+
+    return centers, (tip_x, tip_y), direction
+
 
 @dataclass
 class _CursorState:
@@ -291,6 +372,17 @@ class DesktopController:
                 return it.subs
         return ()
 
+    def _cam_to_screen_point(self, cam_x: float, cam_y: float) -> tuple[int, int]:
+        """Apply the same mirror + inset mapping the cursor uses."""
+        inset = self._cfg().cursor.inset
+        nx = 1.0 - cam_x if self._mirrored else cam_x
+        span = max(1e-6, 1.0 - 2 * inset)
+        mx = (nx - inset) / span
+        my = (cam_y - inset) / span
+        sx = max(0, min(self._screen_w - 1, int(mx * self._screen_w)))
+        sy = max(0, min(self._screen_h - 1, int(my * self._screen_h)))
+        return sx, sy
+
     def _slice_index(self, dx: float, dy: float, n: int) -> int:
         import math
 
@@ -381,31 +473,35 @@ class DesktopController:
             r.hovered_sub = None
             return
 
-        # Past the sub threshold: lock the root and spawn a small second
-        # pinwheel centered at the slice's outer tip. Picking a sub is a
-        # short angular move around *that* tip, not around the main origin —
-        # small, nearby angular motion instead of a big sweep.
-        import math
-
+        # Past the sub threshold: lock the root and lay out a horizontal row
+        # of chips next to the slice tip. Pick the chip nearest the hand's
+        # horizontal screen position. Layout auto-flips direction and clamps
+        # to stay onscreen.
         if r.hovered_root is None or r.hovered_root >= n_roots:
             r.hovered_root = self._slice_index(dx, dy, n_roots)
         subs = tree[r.hovered_root].subs
         if not subs:
             r.hovered_sub = None
             return
-        slice_size = 2 * math.pi / n_roots
-        bisector = -math.pi / 2 + r.hovered_root * slice_size
-        tip_x = r.origin[0] + cfg.radial.sub_threshold * math.cos(bisector)
-        tip_y = r.origin[1] + cfg.radial.sub_threshold * math.sin(bisector)
-        mdx = cx - tip_x
-        mdy = cy - tip_y
-        if (mdx * mdx + mdy * mdy) ** 0.5 < cfg.radial.sub_mini_inner:
-            # Inside the mini-ring's dead zone — don't change the sub.
+        origin_screen = self._cam_to_screen_point(r.origin[0], r.origin[1])
+        centers, _tip, _dir = compute_sub_layout(
+            origin_screen,
+            r.hovered_root,
+            n_roots,
+            len(subs),
+            self._screen_w,
+            self._screen_h,
+            mirrored=self._mirrored,
+        )
+        hs = self._left_cursor_screen
+        if hs is None or not centers:
             if r.hovered_sub is None:
-                # Nothing picked yet: default to the first chip.
                 r.hovered_sub = 0
             return
-        r.hovered_sub = self._slice_index(mdx, mdy, len(subs))
+        # Nearest chip by horizontal distance.
+        hand_x = hs[0]
+        best = min(range(len(centers)), key=lambda i: abs(centers[i][0] - hand_x))
+        r.hovered_sub = best
 
     def _commit_radial(self, root_idx: int | None, sub_idx: int | None) -> None:
         if root_idx is None:

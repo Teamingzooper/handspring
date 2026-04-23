@@ -474,13 +474,9 @@ def test_radial_root_locks_when_hand_enters_sub_ring():
         assert c._radial.hovered_sub is None  # type: ignore[attr-defined]
 
 
-def test_radial_sub_selected_by_angle_around_slice_tip():
-    """Sub pick is a small angular move around the hovered slice's tip.
-
-    The mini-pinwheel is centered at the slice tip (sub_threshold along the
-    slice bisector from the main origin). Moving clockwise/counter-clockwise
-    from straight out picks neighboring subs.
-    """
+def test_radial_sub_row_selected_by_nearest_chip():
+    """Sub chips lay out in a horizontal row; hand's horizontal screen x
+    picks the nearest chip. Moving sideways advances through chips."""
     import math
 
     c = DesktopController(mirrored=False)
@@ -491,11 +487,8 @@ def test_radial_sub_selected_by_angle_around_slice_tip():
     slice_size = 2 * math.pi / n_roots
     bisector = -math.pi / 2 + root_idx * slice_size
     ux, uy = math.cos(bisector), math.sin(bisector)
-    # Perpendicular to the bisector (for sideways nudges around the tip).
-    px, py = -uy, ux
 
     origin_x, origin_y = 0.3, 0.5
-    sub_threshold = c.store.get().radial.sub_threshold
 
     with (
         patch("handspring.desktop_controller.os_control.move_cursor"),
@@ -504,29 +497,53 @@ def test_radial_sub_selected_by_angle_around_slice_tip():
     ):
         c.update(_frame(_hand("open", origin_x, origin_y, pinch=0.95), _absent()), now=0.0)
         c.update(_frame(_hand("open", origin_x, origin_y, pinch=0.95), _absent()), now=0.5)
-        # Enter root ring along the bisector.
+        # Enter root ring along the bisector → pick root_idx.
         c.update(
             _frame(_hand("open", origin_x + ux * 0.05, origin_y + uy * 0.05, pinch=0.95), _absent()),
             now=0.55,
         )
         assert c._radial.hovered_root == root_idx  # type: ignore[attr-defined]
-        # Land at the slice tip (past sub_threshold by a bit). Picks the
-        # sub that points "straight out" — the center sub (top of mini ring).
-        tip_dist = sub_threshold + 0.06
-        x, y = origin_x + ux * tip_dist, origin_y + uy * tip_dist
+        # Push past sub_threshold and land near the slice tip.
+        x, y = origin_x + ux * 0.15, origin_y + uy * 0.15
         c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.60)
-        straight_out = c._radial.hovered_sub  # type: ignore[attr-defined]
-        assert straight_out is not None
-        assert 0 <= straight_out < len(subs)
-        # Nudge perpendicular: different sub.
-        x, y = (
-            origin_x + ux * tip_dist + px * 0.06,
-            origin_y + uy * tip_dist + py * 0.06,
-        )
+        first_pick = c._radial.hovered_sub  # type: ignore[attr-defined]
+        assert first_pick is not None
+        assert 0 <= first_pick < len(subs)
+        # Sweep the hand further sideways — should advance to a later chip.
+        x, y = origin_x + ux * 0.15 + 0.30, origin_y + uy * 0.15
         c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.65)
-        nudged = c._radial.hovered_sub  # type: ignore[attr-defined]
-        assert nudged != straight_out
-        assert 0 <= nudged < len(subs)
+        second_pick = c._radial.hovered_sub  # type: ignore[attr-defined]
+        assert second_pick is not None
+        # At least one of the hand positions should pick a different chip.
+        # (Direction of "sideways" depends on which side the row laid out.)
+        x, y = origin_x + ux * 0.15 - 0.30, origin_y + uy * 0.15
+        c.update(_frame(_hand("open", x, y, pinch=0.95), _absent()), now=0.70)
+        third_pick = c._radial.hovered_sub  # type: ignore[attr-defined]
+        assert {first_pick, second_pick, third_pick} != {first_pick}, (
+            "chip selection should change with horizontal sweep"
+        )
+
+
+def test_compute_sub_layout_clamps_offscreen():
+    """Row shifts inward when it would overflow the screen edge."""
+    from handspring.desktop_controller import SUB_CHIP_MARGIN, SUB_CHIP_W, compute_sub_layout
+
+    screen_w, screen_h = 1440, 900
+    # Pinch near the right edge, slice pointing right → row would go offscreen.
+    centers, _tip, direction = compute_sub_layout(
+        origin_screen=(screen_w - 50, 400),
+        hovered_root=2,  # east-ish in 8-slice
+        n_roots=8,
+        n_subs=6,
+        screen_w=screen_w,
+        screen_h=screen_h,
+        mirrored=False,
+    )
+    # Whichever direction it chose, every chip must stay inside margins.
+    del direction
+    for cx, _cy in centers:
+        assert cx - SUB_CHIP_W // 2 >= SUB_CHIP_MARGIN - 1
+        assert cx + SUB_CHIP_W // 2 <= screen_w - SUB_CHIP_MARGIN + 1
 
 
 # ---------------------------------------------------------------------------

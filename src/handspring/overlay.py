@@ -222,19 +222,19 @@ if _AVAILABLE:
             )
             _draw_label(name, lx, ly, color, highlighted)
 
-        # --- Mini sub-pinwheel anchored at the hovered slice's tip ---
-        # A small second radial centered outside the root ring. Picking a
-        # sub is a short angular nudge around *this* new center — much less
-        # hand travel than the big outer ring, and more precise than a
-        # linear flyout.
+        # --- Horizontal sub-chip row at the hovered slice's tip ---
+        # Chips are always laid out in a horizontal line with spacing. The
+        # row auto-picks a side (left/right) and slides back if it would
+        # clip the screen edge. Selection math lives in desktop_controller —
+        # the overlay just draws the positions it reports.
         if hovered_root is None:
             return
         _name, subs = root_items[hovered_root]
         if not subs:
             return
-        _draw_sub_mini(ctx, ox, oy, hovered_root, hovered_sub, subs, len(root_items), r_root)
+        _draw_sub_chips_row(ctx, ox, oy, hovered_root, hovered_sub, subs, len(root_items), r_root)
 
-    def _draw_sub_mini(
+    def _draw_sub_chips_row(
         ctx: Any,
         ox: float,
         oy: float,
@@ -244,44 +244,56 @@ if _AVAILABLE:
         n_roots: int,
         r_root: float,
     ) -> None:
-        # Mini-ring sits just outside the root ring, centered on the slice tip.
-        mini_gap = 40.0       # screen-space offset from root ring edge to mini center
-        mini_inner = 22.0
-        mini_outer = 110.0
-        label_r = (mini_inner + mini_outer) * 0.5
-
-        root_slice = 2 * math.pi / n_roots
-        bisector = -math.pi / 2 + hovered_root * root_slice
-        tx = ox + (r_root + mini_gap) * math.cos(bisector)
-        ty = oy + (r_root + mini_gap) * math.sin(bisector)
-
-        # Thin connector line from slice tip to mini center (visual link).
-        Quartz.CGContextSetRGBStrokeColor(ctx, 0.60, 0.60, 0.60, 0.55)
-        Quartz.CGContextSetLineWidth(ctx, 1.0)
-        Quartz.CGContextBeginPath(ctx)
-        Quartz.CGContextMoveToPoint(
-            ctx, ox + r_root * math.cos(bisector), oy + r_root * math.sin(bisector)
+        from handspring.desktop_controller import (
+            SUB_CHIP_H,
+            SUB_CHIP_W,
+            compute_sub_layout,
         )
-        Quartz.CGContextAddLineToPoint(ctx, tx - mini_outer * math.cos(bisector) * 0.0, ty)
-        Quartz.CGContextStrokePath(ctx)
 
-        m = len(subs)
-        sub_slice = 2 * math.pi / m
+        screen = AppKit.NSScreen.mainScreen().frame()
+        screen_w = int(screen.size.width)
+        screen_h = int(screen.size.height)
+
+        # The overlay receives origin_screen already mirrored by __main__'s
+        # _cam_to_screen. Pass mirrored=False to compute_sub_layout so it
+        # doesn't double-flip.
+        centers, tip, _dir = compute_sub_layout(
+            (int(ox), int(oy)),
+            hovered_root,
+            n_roots,
+            len(subs),
+            screen_w,
+            screen_h,
+            mirrored=False,
+        )
+
+        # Thin connector line from slice tip to first chip.
+        if centers:
+            Quartz.CGContextSetRGBStrokeColor(ctx, 0.60, 0.60, 0.60, 0.55)
+            Quartz.CGContextSetLineWidth(ctx, 1.0)
+            Quartz.CGContextBeginPath(ctx)
+            Quartz.CGContextMoveToPoint(ctx, tip[0], tip[1])
+            Quartz.CGContextAddLineToPoint(ctx, centers[0][0], centers[0][1])
+            Quartz.CGContextStrokePath(ctx)
+
         sub_armed = hovered_sub is not None
+        corner = 14.0
         for j, sub_name in enumerate(subs):
-            start = -math.pi / 2 + (j - 0.5) * sub_slice
-            end = start + sub_slice
+            cx, cy = centers[j]
             highlighted = j == hovered_sub
-            _pie_wedge_path(ctx, tx, ty, mini_inner, mini_outer, start, end)
+            rect = Quartz.CGRectMake(
+                cx - SUB_CHIP_W / 2, cy - SUB_CHIP_H / 2, SUB_CHIP_W, SUB_CHIP_H
+            )
+            _rounded_rect_path(ctx, rect, corner)
             if highlighted:
                 Quartz.CGContextSetRGBFillColor(ctx, 0.28, 0.50, 0.10, 0.92)
             elif sub_armed:
-                Quartz.CGContextSetRGBFillColor(ctx, 0.12, 0.12, 0.12, 0.80)
+                Quartz.CGContextSetRGBFillColor(ctx, 0.12, 0.12, 0.12, 0.85)
             else:
-                Quartz.CGContextSetRGBFillColor(ctx, 0.10, 0.10, 0.10, 0.55)
+                Quartz.CGContextSetRGBFillColor(ctx, 0.10, 0.10, 0.10, 0.60)
             Quartz.CGContextFillPath(ctx)
 
-            _pie_wedge_path(ctx, tx, ty, mini_inner, mini_outer, start, end)
+            _rounded_rect_path(ctx, rect, corner)
             if highlighted:
                 Quartz.CGContextSetRGBStrokeColor(ctx, 0.53, 1.0, 0.0, 1.0)
                 Quartz.CGContextSetLineWidth(ctx, 2.0)
@@ -292,9 +304,6 @@ if _AVAILABLE:
                 Quartz.CGContextSetLineWidth(ctx, 1.0)
             Quartz.CGContextStrokePath(ctx)
 
-            center_angle = -math.pi / 2 + j * sub_slice
-            slx = tx + label_r * math.cos(center_angle)
-            sly = ty + label_r * math.sin(center_angle)
             color = (
                 AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.60, 1.0, 0.20, 1.0)
                 if highlighted
@@ -302,7 +311,25 @@ if _AVAILABLE:
                     0.92, 0.92, 0.92, 0.95 if sub_armed else 0.70
                 )
             )
-            _draw_label(sub_name, slx, sly, color, highlighted)
+            _draw_label(sub_name, cx, cy, color, highlighted)
+
+    def _rounded_rect_path(ctx: Any, rect: Any, radius: float) -> None:
+        x = rect.origin.x
+        y = rect.origin.y
+        w = rect.size.width
+        h = rect.size.height
+        r = min(radius, w / 2, h / 2)
+        Quartz.CGContextBeginPath(ctx)
+        Quartz.CGContextMoveToPoint(ctx, x + r, y)
+        Quartz.CGContextAddLineToPoint(ctx, x + w - r, y)
+        Quartz.CGContextAddArcToPoint(ctx, x + w, y, x + w, y + r, r)
+        Quartz.CGContextAddLineToPoint(ctx, x + w, y + h - r)
+        Quartz.CGContextAddArcToPoint(ctx, x + w, y + h, x + w - r, y + h, r)
+        Quartz.CGContextAddLineToPoint(ctx, x + r, y + h)
+        Quartz.CGContextAddArcToPoint(ctx, x, y + h, x, y + h - r, r)
+        Quartz.CGContextAddLineToPoint(ctx, x, y + r)
+        Quartz.CGContextAddArcToPoint(ctx, x, y, x + r, y, r)
+        Quartz.CGContextClosePath(ctx)
 
     def _draw_label(text: str, cx: float, cy: float, color: Any, bold: bool) -> None:
         attrs = {
