@@ -491,6 +491,7 @@ class DesktopController:
             r.hovered_root = new_idx
 
     def _commit_radial(self, root_idx: int | None, sub_idx: int | None) -> None:
+        del sub_idx  # no longer used — all commands are flat leaves
         if root_idx is None:
             return
         tree = self._cfg().radial_tree
@@ -498,86 +499,48 @@ class DesktopController:
             return
         item = tree[root_idx]
         name = item.name
-        subs = item.subs
-        sub_name = subs[sub_idx] if (sub_idx is not None and sub_idx < len(subs)) else None
 
-        # Built-in roots.
         if name == "None":
             self._mode = "none"
             self._events_out.append("mode:none")
-            return
-        if name == "Create":
-            self._mode = "create"
-            if sub_name is not None:
-                self._selected_app = sub_name
-                self._events_out.append(f"select_app:{self._selected_app}")
-            self._events_out.append("mode:create")
             return
         if name == "Scroll":
             self._mode = "scroll"
             self._events_out.append("mode:scroll")
             return
-        if name == "Screenshot":
-            variant = (sub_name or "Screen").lower()
-            os_control.screenshot(variant)
-            self._events_out.append(f"screenshot:{variant}")
-            return
-        if name == "Window":
-            sub = sub_name or "Center"
-            if sub == "Close":
-                os_control.close_frontmost_window()
-            elif sub == "Minimize":
-                os_control.minimize_front_window()
-            elif sub == "Fullscreen":
-                os_control.fullscreen_front_window()
-            elif sub in ("Left", "Right", "Center"):
-                os_control.tile_front_window(sub.lower())
-            self._events_out.append(f"window:{sub.lower()}")
-            return
         if name == "Mission":
             os_control.mission_control()
             self._events_out.append("mission")
             return
-        if name == "Desktops":
-            direction = (sub_name or "Right").lower()
-            os_control.switch_desktop(direction)
-            self._events_out.append(f"desktop:{direction}")
+        if name == "Screenshot":
+            os_control.screenshot("screen")
+            self._events_out.append("screenshot:screen")
             return
-        if name == "More":
-            self._handle_more(sub_name)
-            return
-
-        # User-defined root with a custom command on the root item itself
-        # (leaf with no subs) OR a custom sub selection. If the selected
-        # RadialItem has a command string, run it.
-        if item.command and sub_name is None:
-            self._run_command(item.command)
-            self._events_out.append(f"run:{name}")
-
-    def _handle_more(self, sub_name: str | None) -> None:
-        if sub_name == "Settings":
+        if name == "Settings":
             self._events_out.append("settings:open")
             if self._on_open_settings is not None:
                 try:
                     self._on_open_settings()
                 except Exception as e:  # noqa: BLE001
                     print(f"handspring: settings open failed ({e})", file=sys.stderr)
-        elif sub_name == "Reload":
-            self._events_out.append("config:reload")
-            if self._on_reload_config is not None:
-                try:
-                    self._on_reload_config()
-                except Exception as e:  # noqa: BLE001
-                    print(f"handspring: reload failed ({e})", file=sys.stderr)
-            else:
-                self._store.reload()
-        elif sub_name == "Quit":
-            self._events_out.append("app:quit")
-            if self._on_quit is not None:
-                try:
-                    self._on_quit()
-                except Exception as e:  # noqa: BLE001
-                    print(f"handspring: quit handler failed ({e})", file=sys.stderr)
+            return
+        if name == "Create":
+            # Flat "Create" leaf = spawn a default-sized Finder (or configured app)
+            # at a reasonable position without needing the two-hand pull.
+            app = item.subs[0] if item.subs else "Finder"
+            self._selected_app = app
+            self._mode = "create"
+            cx = self._screen_w // 2
+            cy = self._screen_h // 2
+            bounds = (cx - 350, cy - 250, cx + 350, cy + 250)
+            os_control.new_app_window(app, bounds=bounds)
+            self._events_out.append(f"new_window:{app}")
+            self._post_spawn = (bounds, self._last_now + self._post_spawn_hold_seconds)
+            return
+        # User-defined leaf with a custom shell command.
+        if item.command:
+            self._run_command(item.command)
+            self._events_out.append(f"run:{name}")
 
     @staticmethod
     def _run_command(command: str) -> None:
