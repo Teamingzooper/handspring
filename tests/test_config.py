@@ -234,3 +234,19 @@ def test_dump_toml_is_stable() -> None:
     s1 = _dump_toml(Config())
     s2 = _dump_toml(Config())
     assert s1 == s2
+
+
+def test_radial_config_defaults_match_flick_model() -> None:
+    cfg = Config()
+    assert cfg.radial.flick_threshold == 0.03
+    assert cfg.radial.angular_hysteresis == 0.15
+    # Old fields must be gone:
+    assert not hasattr(cfg.radial, "hold_seconds")
+    assert not hasattr(cfg.radial, "sub_threshold")
+    assert not hasattr(cfg.radial, "inner_radius")
+    assert not hasattr(cfg.radial, "sub_mini_inner")
+
+
+def test_create_config_has_smoothing() -> None:
+    cfg = Config()
+    assert cfg.create.smoothing == 0.35

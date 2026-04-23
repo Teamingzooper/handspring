@@ -55,9 +55,12 @@ class CursorConfig:
 
 @dataclass(frozen=True)
 class RadialConfig:
-    hold_seconds: float = 0.4
-    inner_radius: float = 0.03
-    sub_threshold: float = 0.10
+    # Minimum camera-space displacement from pinch origin for a release to
+    # count as a commit. Below = cancel (deliberate "no-op" pinch).
+    flick_threshold: float = 0.03
+    # Fractional expansion of the current slice's angular range. Higher =
+    # more sticky, less flicker near slice boundaries.
+    angular_hysteresis: float = 0.15
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,8 @@ class ScrollConfig:
 class CreateConfig:
     entry_distance: float = 0.08
     min_diagonal: float = 0.15
+    # EMA factor for the ghost rect corners (same idea as cursor smoothing).
+    smoothing: float = 0.35
 
 
 @dataclass(frozen=True)
