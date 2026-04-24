@@ -115,3 +115,83 @@ def test_timeout_skips_step_after_30_seconds():
     sm.update(_frame(right=_hand(present=False)), now=31.0)
     assert StepId.DETECT_RIGHT in sm.result.skipped_steps
     assert sm.current_step == StepId.POINT_RIGHT
+
+
+# ---------------------------------------------------------------------------
+# __main__ helper tests
+# ---------------------------------------------------------------------------
+
+
+def test_should_run_tutorial_skip_flag_wins(tmp_path):
+    from argparse import Namespace
+
+    from handspring.__main__ import _should_run_tutorial
+
+    config_path = tmp_path / "config.toml"
+    args = Namespace(skip_tutorial=True, tutorial=False)
+    run, flag = _should_run_tutorial(args, config_path)
+    assert run is False
+    assert flag is None
+
+
+def test_should_run_tutorial_force_flag(tmp_path):
+    from argparse import Namespace
+
+    from handspring.__main__ import _should_run_tutorial
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[cursor]\nsmoothing = 0.5\n")
+    args = Namespace(skip_tutorial=False, tutorial=True)
+    run, flag = _should_run_tutorial(args, config_path)
+    assert run is True
+
+
+def test_should_run_tutorial_missing_config(tmp_path):
+    from argparse import Namespace
+
+    from handspring.__main__ import _should_run_tutorial
+
+    config_path = tmp_path / "nope.toml"
+    args = Namespace(skip_tutorial=False, tutorial=False)
+    run, flag = _should_run_tutorial(args, config_path)
+    assert run is True
+
+
+def test_should_run_tutorial_replay_flag(tmp_path):
+    from argparse import Namespace
+
+    from handspring.__main__ import _should_run_tutorial
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[cursor]\nsmoothing = 0.5\n")
+    flag = tmp_path / "replay-tutorial.flag"
+    flag.write_text("")
+    args = Namespace(skip_tutorial=False, tutorial=False)
+    run, flag_out = _should_run_tutorial(args, config_path)
+    assert run is True
+    assert flag_out == flag
+
+
+def test_apply_calibration_scales_thresholds(tmp_path):
+    from handspring.__main__ import _BASELINE_HAND_SIZE, _apply_calibration
+    from handspring.config import Config, ConfigStore
+    from handspring.tutorial import CalibrationResult
+
+    store = ConfigStore(persist=False, initial=Config())
+    base_flick = store.get().radial.flick_threshold
+    base_entry = store.get().create.entry_distance
+    result = CalibrationResult(hand_size=_BASELINE_HAND_SIZE * 1.5)
+    _apply_calibration(store, result)
+    assert store.get().radial.flick_threshold == base_flick * 1.5
+    assert store.get().create.entry_distance == base_entry * 1.5
+
+
+def test_apply_calibration_noop_when_hand_size_none():
+    from handspring.__main__ import _apply_calibration
+    from handspring.config import Config, ConfigStore
+    from handspring.tutorial import CalibrationResult
+
+    store = ConfigStore(persist=False, initial=Config())
+    before = store.get()
+    _apply_calibration(store, CalibrationResult(hand_size=None))
+    assert store.get() == before

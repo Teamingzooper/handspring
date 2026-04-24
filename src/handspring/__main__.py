@@ -21,6 +21,8 @@ import signal
 import sys
 import time
 import webbrowser
+from dataclasses import replace
+from pathlib import Path
 from types import FrameType
 
 import cv2
@@ -34,8 +36,40 @@ from handspring.osc_out import OscEmitter
 from handspring.preview import Preview
 from handspring.settings_server import SettingsServer
 from handspring.tracker import Tracker, TrackerConfig
+from handspring.tutorial import CalibrationResult, Tutorial
 from handspring.types import FrameResult
 from handspring.web_server import LatestFrame, WebServer
+
+_BASELINE_HAND_SIZE = 0.12
+_REPLAY_FLAG_NAME = "replay-tutorial.flag"
+
+
+def _should_run_tutorial(args: argparse.Namespace, config_path: Path) -> tuple[bool, Path | None]:
+    """Return (run, flag_to_delete). flag_to_delete is the replay flag if consumed."""
+    if args.skip_tutorial:
+        return False, None
+    if args.tutorial:
+        return True, None
+    flag = config_path.parent / _REPLAY_FLAG_NAME
+    if flag.exists():
+        return True, flag
+    if not config_path.exists():
+        return True, None
+    return False, None
+
+
+def _apply_calibration(store: ConfigStore, result: CalibrationResult) -> None:
+    """Scale flick_threshold + entry_distance by hand_size / baseline."""
+    if result.hand_size is None:
+        return
+    scale = max(0.5, min(2.0, result.hand_size / _BASELINE_HAND_SIZE))
+    cfg = store.get()
+    cfg = replace(
+        cfg,
+        radial=replace(cfg.radial, flick_threshold=cfg.radial.flick_threshold * scale),
+        create=replace(cfg.create, entry_distance=cfg.create.entry_distance * scale),
+    )
+    store.set(cfg)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -94,6 +128,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="print FPS + state to terminal every N seconds (default: 0.5)",
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    p.add_argument("--skip-tutorial", action="store_true",
+                   help="skip the first-run tutorial")
+    p.add_argument("--tutorial", action="store_true",
+                   help="force-run the tutorial even if config exists")
     p.set_defaults(mirror=True, os_control=True, overlay=True)
     return p.parse_args(argv)
 
@@ -115,8 +153,6 @@ def main(argv: list[str] | None = None) -> int:
     if not cap.isOpened():
         print(f"error: could not open camera {args.camera}", file=sys.stderr)
         return 2
-
-    from pathlib import Path
 
     config_path = Path(args.config).expanduser() if args.config else None
     store = ConfigStore(path=config_path)
@@ -146,6 +182,19 @@ def main(argv: list[str] | None = None) -> int:
             track_pose=not args.no_pose,
         )
     )
+
+    run_tutorial, replay_flag = _should_run_tutorial(args, store.path)
+    if run_tutorial:
+        print("Running first-run tutorial — press Esc/q to skip.", flush=True)
+        tutorial = Tutorial(tracker)
+        result = tutorial.run(cap)
+        if result is not None:
+            _apply_calibration(store, result)
+        if replay_flag is not None and replay_flag.exists():
+            import contextlib
+            with contextlib.suppress(OSError):
+                replay_flag.unlink()
+
     emitter = OscEmitter(host=args.host, port=args.port)
     desktop = (
         DesktopController(
