@@ -248,3 +248,37 @@ def test_radial_config_defaults_match_flick_model() -> None:
 def test_create_config_has_smoothing() -> None:
     cfg = Config()
     assert cfg.create.smoothing == 0.35
+
+
+def test_settings_server_queues_replay_tutorial_flag(tmp_path: Path) -> None:
+    import http.server
+    import socketserver
+    import threading
+    import urllib.request
+
+    from handspring.config import ConfigStore
+    from handspring.settings_server import _make_handler
+
+    store = ConfigStore(path=tmp_path / "c.toml", persist=False)
+
+    class _S(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    s = _S(("127.0.0.1", 0), _make_handler(store))
+    port = s.server_address[1]
+    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t.start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/replay-tutorial",
+            data=b"",
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as r:
+            assert r.status == 200
+        flag = tmp_path / "replay-tutorial.flag"
+        assert flag.exists()
+    finally:
+        s.shutdown()
+        s.server_close()

@@ -169,6 +169,7 @@ _INDEX_HTML = """<!doctype html>
     <button id=\"save\">Save</button>
     <button class=\"secondary\" id=\"reload\">Reload from disk</button>
     <button class=\"secondary\" id=\"reset\">Reset defaults</button>
+    <button class=\"secondary\" id=\"replay-tutorial\">Replay tutorial</button>
   </div>
   <div id=\"root\"></div>
 </main>
@@ -181,9 +182,11 @@ const SLIDERS = {
     inset: [0, 0.3, 0.01, 'Camera → screen edge inset'],
   },
   radial: {
-    hold_seconds: [0.1, 2.0, 0.05, 'Pinch-hold to open wheel'],
-    inner_radius: [0, 0.1, 0.005, 'Dead zone'],
-    sub_threshold: [0.05, 0.3, 0.005, 'Root → sub-ring distance'],
+    flick_threshold: [0.005, 0.15, 0.005, 'Minimum flick distance to commit (camera-space)'],
+    angular_hysteresis: [0, 0.5, 0.01, 'Slice-boundary stickiness'],
+  },
+  gestures: {
+    peace_hold_seconds: [0.1, 2.0, 0.05, 'Peace-sign hold time to fire'],
   },
   scroll: {
     deadzone: [0, 0.3, 0.01, 'Middle band with no scroll'],
@@ -207,6 +210,9 @@ const SLIDERS = {
 const CHECKBOXES = {
   overlay: ['enabled'],
   features: ['tiling', 'spaces', 'mission_control', 'screenshots'],
+};
+const TEXT_FIELDS = {
+  gestures: ['peace_command'],
 };
 const COLORS = {
   colors: ['radial_highlight', 'radial_outline', 'cursor_dot'],
@@ -273,6 +279,20 @@ function render() {
     }
   }
   root.appendChild(featDiv);
+
+  // Text-field overrides
+  const textDiv = h('div', {class:'section'}, h('h2', {}, 'text overrides'));
+  for (const section in TEXT_FIELDS) {
+    for (const key of TEXT_FIELDS[section]) {
+      const val = currentConfig[section][key] || '';
+      const input = h('input', {type:'text', value: val,
+                                placeholder: 'shell command (leave blank for default)'});
+      input.addEventListener('input', e => { currentConfig[section][key] = e.target.value; });
+      textDiv.appendChild(h('div', {class:'row'},
+        h('label', {}, `${section}.${key}`), input, h('span')));
+    }
+  }
+  root.appendChild(textDiv);
 
   // Colors
   const colorDiv = h('div', {class:'section'}, h('h2', {}, 'colors'));
@@ -379,6 +399,12 @@ document.getElementById('reset').addEventListener('click', async () => {
     headers: {'Content-Type':'application/json'}, body: '{\"__reset\": true}'});
   await load();
 });
+document.getElementById('replay-tutorial').addEventListener('click', async () => {
+  if (!confirm('Queue the tutorial to run on next handspring launch?')) return;
+  const r = await fetch('/api/replay-tutorial', {method: 'POST'});
+  if (r.ok) toast('tutorial queued \u2014 restart handspring to run it');
+  else toast('failed to queue tutorial', true);
+});
 load();
 </script>
 </body>
@@ -417,6 +443,16 @@ def _make_handler(
                 self.send_error(404, "not found")
 
         def do_POST(self) -> None:  # noqa: N802
+            if self.path == "/api/replay-tutorial":
+                # Write a flag file next to the config. Main loop reads & deletes it on next startup.
+                try:
+                    flag = store.path.parent / "replay-tutorial.flag"
+                    flag.parent.mkdir(parents=True, exist_ok=True)
+                    flag.write_text("1", encoding="utf-8")
+                    self._send_json(200, {"ok": True, "flag": str(flag)})
+                except OSError as e:
+                    self._send_json(500, {"error": str(e)})
+                return
             if self.path == "/api/reload":
                 store.reload()
                 self._send_json(200, {"ok": True})
