@@ -252,6 +252,13 @@ def mission_control() -> None:
     _key_code(126, ["control down"])  # 126 = up arrow
 
 
+def show_desktop() -> None:
+    """Toggle Show Desktop (F11 keycode 103 by default on macOS)."""
+    if not _MAC:
+        return
+    _run_script('tell application "System Events" to key code 103')
+
+
 def switch_desktop(direction: str) -> None:
     """Page left/right between macOS Spaces (Ctrl+←/→)."""
     code = 123 if direction == "left" else 124  # 123=left, 124=right

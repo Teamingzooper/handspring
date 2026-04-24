@@ -61,6 +61,12 @@ class _RadialState:
     hovered_root: int | None = None
 
 
+@dataclass
+class _PeaceState:
+    start: float | None = None  # monotonic time peace hold began; None = not pending
+    fired: bool = False          # True once fired; must drop before re-firing
+
+
 class DesktopController:
     def __init__(
         self,
@@ -81,6 +87,7 @@ class DesktopController:
         self._cursor = _CursorState()
         self._create = _CreateState()
         self._radial = _RadialState()
+        self._peace = _PeaceState()
         self._disabled = False
         self._failsafe_start: float | None = None
         self._screen_w, self._screen_h = os_control.screen_size()
@@ -161,6 +168,7 @@ class DesktopController:
                 self._cursor.pressed = False
             return
 
+        self._handle_peace(frame, now)
         self._handle_cursor(frame)
         if self._mode == "create":
             self._handle_create(frame)
@@ -192,6 +200,32 @@ class DesktopController:
                 self._cursor.pressed = False
             return True
         return False
+
+    # ---- peace sign -----------------------------------------------------
+
+    def _handle_peace(self, frame: FrameResult, now: float) -> None:
+        peace_now = (
+            (frame.left.present and frame.left.gesture == "peace")
+            or (frame.right.present and frame.right.gesture == "peace")
+        )
+        if not peace_now:
+            self._peace.start = None
+            self._peace.fired = False
+            return
+        if self._peace.fired:
+            return
+        if self._peace.start is None:
+            self._peace.start = now
+            return
+        cfg = self._cfg().gestures
+        if (now - self._peace.start) >= cfg.peace_hold_seconds:
+            self._peace.fired = True
+            if cfg.peace_command:
+                self._run_command(cfg.peace_command)
+                self._events_out.append("peace:command")
+            else:
+                os_control.show_desktop()
+                self._events_out.append("peace:show_desktop")
 
     # ---- cursor ---------------------------------------------------------
 

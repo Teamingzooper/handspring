@@ -110,6 +110,12 @@ class ServerConfig:
     settings_port: int = 8766
 
 
+@dataclass(frozen=True)
+class GesturesConfig:
+    peace_hold_seconds: float = 0.3
+    peace_command: str = ""  # empty = built-in show_desktop()
+
+
 def _default_radial_tree() -> tuple[RadialItem, ...]:
     return (
         RadialItem("None"),
@@ -132,6 +138,7 @@ class Config:
     colors: ColorsConfig = field(default_factory=ColorsConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    gestures: GesturesConfig = field(default_factory=GesturesConfig)
     radial_tree: tuple[RadialItem, ...] = field(default_factory=_default_radial_tree)
 
 
@@ -191,6 +198,7 @@ def _from_dict(data: dict[str, Any]) -> Config:
         ("colors", ColorsConfig),
         ("features", FeaturesConfig),
         ("server", ServerConfig),
+        ("gestures", GesturesConfig),
     ):
         updates[section_name] = _merge_section(section_name, cls)
 
@@ -234,6 +242,7 @@ def _dump_toml(cfg: Config) -> str:
         "colors",
         "features",
         "server",
+        "gestures",
     ):
         lines.append(f"[{section}]")
         for k, v in data[section].items():

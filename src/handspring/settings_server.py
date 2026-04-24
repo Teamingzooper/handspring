@@ -28,6 +28,7 @@ from handspring.config import (
     CursorConfig,
     FailsafeConfig,
     FeaturesConfig,
+    GesturesConfig,
     OverlayConfig,
     RadialConfig,
     RadialItem,
@@ -46,6 +47,7 @@ _SECTION_TYPES: dict[str, type] = {
     "colors": ColorsConfig,
     "features": FeaturesConfig,
     "server": ServerConfig,
+    "gestures": GesturesConfig,
 }
 
 

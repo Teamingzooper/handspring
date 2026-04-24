@@ -536,6 +536,83 @@ def test_create_ghost_rect_ema_smooths_jitter():
         assert x_min > 0.15
 
 
+def test_peace_sign_held_fires_show_desktop():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.show_desktop") as sd,
+    ):
+        # Frame 0: peace on right hand — not yet held.
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=0.0)
+        sd.assert_not_called()
+        # Frame 1: still peace but total hold only 0.1s — no fire.
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=0.1)
+        sd.assert_not_called()
+        # Frame 2: held 0.35s ≥ 0.3s threshold — fire.
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=0.35)
+        sd.assert_called_once()
+
+
+def test_peace_fires_once_and_requires_drop_to_rearm():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.show_desktop") as sd,
+    ):
+        # Hold peace long enough to fire.
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=0.0)
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=0.5)
+        assert sd.call_count == 1
+        # Keep holding — must NOT fire again.
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=1.0)
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=1.5)
+        assert sd.call_count == 1
+        # Drop peace (open hand).
+        c.update(_frame(_absent(), _hand("open", 0.5, 0.5)), now=2.0)
+        # Re-show peace and hold — should fire again.
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=2.1)
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=2.5)
+        assert sd.call_count == 2
+
+
+def test_peace_suppressed_while_disabled():
+    c = DesktopController(mirrored=False)
+    # Disable via failsafe (both fists 5s).
+    t = 0.0
+    while t < 6.0:
+        c.update(_frame(_hand("fist", 0.3, 0.5), _hand("fist", 0.7, 0.5)), now=t)
+        t += 0.1
+    assert not c.enabled()
+    with patch("handspring.desktop_controller.os_control.show_desktop") as sd:
+        # Hold peace — must NOT fire while disabled.
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=t)
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=t + 0.5)
+        sd.assert_not_called()
+
+
+def test_peace_command_override_runs_shell_instead():
+    """If cfg.gestures.peace_command is set, run that shell cmd instead of show_desktop()."""
+    from handspring.config import Config, ConfigStore, GesturesConfig
+    cfg = Config(gestures=GesturesConfig(peace_command="echo hi"))
+    store = ConfigStore(persist=False, initial=cfg)
+    c = DesktopController(mirrored=False, store=store)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.show_desktop") as sd,
+        patch("handspring.desktop_controller.subprocess.Popen") as pop,
+    ):
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=0.0)
+        c.update(_frame(_absent(), _hand("peace", 0.5, 0.5)), now=0.5)
+        sd.assert_not_called()
+        pop.assert_called_once()
+
+
 def test_flick_hysteresis_keeps_selection_stable_near_boundary():
     """Small wobble across a slice boundary stays on the originally-picked slice."""
     import math
