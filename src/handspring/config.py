@@ -116,6 +116,34 @@ class GesturesConfig:
     peace_command: str = ""  # empty = built-in show_desktop()
 
 
+@dataclass(frozen=True)
+class FaceConfig:
+    """Face-tracking features.
+
+    ``gate_gestures`` enables the "safety net": when the user's face isn't
+    present or isn't roughly facing the camera, cursor moves, clicks, and
+    the radial are all suppressed. Prevents accidental fires when the user
+    turns to talk to someone or reaches off-screen.
+
+    ``mouth_open_*`` controls the "mouth wide open" → Spotlight shortcut.
+    """
+
+    gate_gestures: bool = True
+    # Max |yaw| considered "facing the camera" (in [-1, 1] normalized units).
+    gate_yaw_tolerance: float = 0.6
+    gate_pitch_tolerance: float = 0.5
+    # How many frames without a qualifying face before gesture control
+    # is suppressed. Prevents blinks / momentary detection losses from
+    # jittering the gate state.
+    gate_grace_frames: int = 20
+    # Mouth-open shortcut.
+    mouth_open_threshold: float = 0.55
+    mouth_open_hold_seconds: float = 3.0
+    # Empty = built-in Spotlight (Cmd+Space); set to any shell command
+    # to replace. Use e.g. "open -a Raycast" for a different launcher.
+    mouth_open_command: str = ""
+
+
 def _default_radial_tree() -> tuple[RadialItem, ...]:
     return (
         RadialItem("None"),
@@ -139,6 +167,7 @@ class Config:
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     gestures: GesturesConfig = field(default_factory=GesturesConfig)
+    face: FaceConfig = field(default_factory=FaceConfig)
     radial_tree: tuple[RadialItem, ...] = field(default_factory=_default_radial_tree)
 
 
@@ -199,6 +228,7 @@ def _from_dict(data: dict[str, Any]) -> Config:
         ("features", FeaturesConfig),
         ("server", ServerConfig),
         ("gestures", GesturesConfig),
+        ("face", FaceConfig),
     ):
         updates[section_name] = _merge_section(section_name, cls)
 
@@ -243,6 +273,7 @@ def _dump_toml(cfg: Config) -> str:
         "features",
         "server",
         "gestures",
+        "face",
     ):
         lines.append(f"[{section}]")
         for k, v in data[section].items():

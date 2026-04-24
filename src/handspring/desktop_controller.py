@@ -67,6 +67,28 @@ class _PeaceState:
     fired: bool = False          # True once fired; must drop before re-firing
 
 
+@dataclass
+class _MouthState:
+    """Hold-open state for the mouth-open → Spotlight gesture."""
+
+    start: float | None = None  # monotonic time the mouth opened
+    fired: bool = False          # True once fired; must close before re-firing
+
+
+@dataclass
+class _FaceGateState:
+    """Tracks whether the user is "present and facing the camera."
+
+    Uses a grace counter so a single missing frame (blink, brief occlusion)
+    doesn't suppress gestures. Gestures are gated off only after a
+    sustained absence.
+    """
+
+    present_frames: int = 0    # consecutive frames with a qualifying face
+    absent_frames: int = 0     # consecutive frames without one
+    gated: bool = False        # True = gestures currently suppressed
+
+
 class DesktopController:
     def __init__(
         self,
@@ -88,6 +110,8 @@ class DesktopController:
         self._create = _CreateState()
         self._radial = _RadialState()
         self._peace = _PeaceState()
+        self._mouth = _MouthState()
+        self._face_gate = _FaceGateState()
         self._disabled = False
         self._failsafe_start: float | None = None
         self._screen_w, self._screen_h = os_control.screen_size()
@@ -168,13 +192,109 @@ class DesktopController:
                 self._cursor.pressed = False
             return
 
+        # Face features are always evaluated (peace & mouth use them, and
+        # the gate influences whether hand gestures run at all).
+        self._update_face_gate(frame)
+        self._handle_mouth_open(frame, now)
         self._handle_peace(frame, now)
+
+        # If the face gate is engaged, suppress hand gestures entirely.
+        # Release any held click so we don't leave the mouse down.
+        if self._face_gate.gated:
+            if self._cursor.pressed:
+                os_control.mouse_up(self._cursor.last_x, self._cursor.last_y)
+                self._cursor.pressed = False
+            self._cursor.smooth_nx = None
+            self._cursor.smooth_ny = None
+            # Cancel any in-progress radial / create gestures so they don't
+            # commit when the user returns.
+            self._radial.pinching = False
+            self._radial.active = False
+            self._radial.hovered_root = None
+            self._create.armed = False
+            self._create.smooth_left = None
+            self._create.smooth_right = None
+            self._left_cursor_screen = None
+            return
+
         self._handle_cursor(frame)
         if self._mode == "create":
             self._handle_create(frame)
         self._handle_radial(frame, now)
         if self._mode == "scroll":
             self._handle_scroll(frame)
+
+    # ---- face gate ------------------------------------------------------
+
+    def _update_face_gate(self, frame: FrameResult) -> None:
+        """Track whether the user is present-and-facing-the-camera.
+
+        A sustained absence (more than ``gate_grace_frames`` consecutive
+        frames without a qualifying face) engages the gate. A single
+        qualifying frame disengages it — we want fast re-enable when the
+        user returns, but slow disable so a blink doesn't kick us out.
+        """
+        cfg = self._cfg().face
+        if not cfg.gate_gestures:
+            self._face_gate.gated = False
+            self._face_gate.present_frames = 0
+            self._face_gate.absent_frames = 0
+            return
+
+        face = frame.face
+        qualifying = (
+            face.present
+            and face.features is not None
+            and abs(face.features.yaw) <= cfg.gate_yaw_tolerance
+            and abs(face.features.pitch) <= cfg.gate_pitch_tolerance
+        )
+        if qualifying:
+            self._face_gate.present_frames += 1
+            self._face_gate.absent_frames = 0
+            if self._face_gate.gated:
+                self._face_gate.gated = False
+                self._events_out.append("face:present")
+        else:
+            self._face_gate.absent_frames += 1
+            self._face_gate.present_frames = 0
+            if (
+                not self._face_gate.gated
+                and self._face_gate.absent_frames >= cfg.gate_grace_frames
+            ):
+                self._face_gate.gated = True
+                self._events_out.append("face:absent")
+
+    def face_gated(self) -> bool:
+        """True when face-gating is active and the face isn't qualifying."""
+        return self._face_gate.gated
+
+    # ---- mouth-open → Spotlight ----------------------------------------
+
+    def _handle_mouth_open(self, frame: FrameResult, now: float) -> None:
+        cfg = self._cfg().face
+        face = frame.face
+        mouth_open = (
+            face.present
+            and face.features is not None
+            and face.features.mouth_open >= cfg.mouth_open_threshold
+        )
+        if not mouth_open:
+            self._mouth.start = None
+            self._mouth.fired = False
+            return
+        if self._mouth.fired:
+            return
+        if self._mouth.start is None:
+            self._mouth.start = now
+            return
+        if now - self._mouth.start >= cfg.mouth_open_hold_seconds:
+            self._mouth.fired = True
+            if cfg.mouth_open_command:
+                self._run_command(cfg.mouth_open_command)
+                self._events_out.append("mouth:command")
+            else:
+                os_control.spotlight()
+                self._events_out.append("mouth:spotlight")
 
     # ---- failsafe -------------------------------------------------------
 

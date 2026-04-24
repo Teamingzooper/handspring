@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from handspring.desktop_controller import DesktopController
 from handspring.types import (
+    FaceFeatures,
     FaceState,
     FrameResult,
     HandFeatures,
@@ -16,6 +17,17 @@ from handspring.types import (
     MotionState,
     PoseState,
 )
+
+
+def _face_facing(mouth_open: float = 0.0) -> FaceState:
+    """Default face: present, looking at camera, mouth at given openness."""
+    return FaceState(
+        present=True,
+        features=FaceFeatures(yaw=0.0, pitch=0.0, mouth_open=mouth_open),
+        expression="neutral",
+        eye_left_open=1.0,
+        eye_right_open=1.0,
+    )
 
 
 def _hf(x: float, y: float, pinch: float = 0.0) -> HandFeatures:
@@ -56,11 +68,15 @@ def _absent() -> HandState:
     )
 
 
-def _frame(left: HandState, right: HandState) -> FrameResult:
+def _frame(
+    left: HandState, right: HandState, face: FaceState | None = None
+) -> FrameResult:
+    # Default to a face-present frame so face-gating (on by default) doesn't
+    # suppress hand gestures in tests. Pass an explicit ``face`` to override.
     return FrameResult(
         left=left,
         right=right,
-        face=FaceState(False, None, "neutral", 0, 0),
+        face=face if face is not None else _face_facing(),
         pose=PoseState(False, None),
         fps=30.0,
         clap_event=False,
@@ -661,3 +677,165 @@ def test_flick_hysteresis_keeps_selection_stable_near_boundary():
         # Thanks to hysteresis (0.15), it should still be on `target`,
         # not the neighbor.
         assert c._radial.hovered_root == target  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Face gate + mouth-open
+# ---------------------------------------------------------------------------
+
+
+def _face_absent() -> FaceState:
+    return FaceState(
+        present=False, features=None, expression="neutral",
+        eye_left_open=0.0, eye_right_open=0.0,
+    )
+
+
+def _face_looking_away(yaw: float) -> FaceState:
+    return FaceState(
+        present=True,
+        features=FaceFeatures(yaw=yaw, pitch=0.0, mouth_open=0.0),
+        expression="neutral", eye_left_open=1.0, eye_right_open=1.0,
+    )
+
+
+def test_face_gate_suppresses_cursor_after_grace_period():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor") as mv,
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+    ):
+        # Present → cursor moves.
+        c.update(_frame(_absent(), _hand("open", 0.5, 0.5)), now=0.0)
+        assert mv.call_count == 1
+        # Simulate the face disappearing past the grace period.
+        for i in range(25):
+            c.update(
+                _frame(_absent(), _hand("open", 0.5, 0.5), face=_face_absent()),
+                now=(i + 1) * 0.033,
+            )
+        # Gate should now be engaged.
+        assert c.face_gated()
+        # Further frames with the face absent must not trigger move_cursor.
+        count_before = mv.call_count
+        for i in range(10):
+            c.update(
+                _frame(_absent(), _hand("open", 0.5, 0.5), face=_face_absent()),
+                now=1.0 + i * 0.033,
+            )
+        assert mv.call_count == count_before
+
+
+def test_face_gate_reengages_quickly_when_face_returns():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor") as mv,
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+    ):
+        # Disappear for the grace period.
+        for i in range(25):
+            c.update(
+                _frame(_absent(), _hand("open", 0.5, 0.5), face=_face_absent()),
+                now=i * 0.033,
+            )
+        assert c.face_gated()
+        # Single present-face frame re-enables.
+        c.update(_frame(_absent(), _hand("open", 0.5, 0.5)), now=1.0)
+        assert not c.face_gated()
+        assert mv.called  # cursor resumed
+
+
+def test_face_gate_looking_away_is_same_as_absent():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+    ):
+        # yaw 0.9 is beyond the default 0.6 tolerance.
+        for i in range(25):
+            c.update(
+                _frame(_absent(), _hand("open", 0.5, 0.5), face=_face_looking_away(0.9)),
+                now=i * 0.033,
+            )
+        assert c.face_gated()
+
+
+def test_face_gate_can_be_disabled_via_config():
+    from handspring.config import Config, ConfigStore, FaceConfig
+    store = ConfigStore(persist=False)
+    store.set(Config(face=FaceConfig(gate_gestures=False)))
+    c = DesktopController(mirrored=False, store=store)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor") as mv,
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+    ):
+        # Long absence with gate disabled — cursor should keep moving.
+        for i in range(30):
+            c.update(
+                _frame(_absent(), _hand("open", 0.5, 0.5), face=_face_absent()),
+                now=i * 0.033,
+            )
+        assert not c.face_gated()
+        assert mv.call_count == 30
+
+
+def test_mouth_open_hold_fires_spotlight():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.spotlight") as sp,
+    ):
+        face_open = _face_facing(mouth_open=0.8)
+        # Frame 0: mouth opens, start timer.
+        c.update(_frame(_absent(), _absent(), face=face_open), now=0.0)
+        assert sp.call_count == 0
+        # Frame 1: still open but below hold time.
+        c.update(_frame(_absent(), _absent(), face=face_open), now=1.0)
+        assert sp.call_count == 0
+        # Frame 2: past 3s hold → fires.
+        c.update(_frame(_absent(), _absent(), face=face_open), now=3.1)
+        assert sp.call_count == 1
+
+
+def test_mouth_open_brief_open_does_not_fire():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.spotlight") as sp,
+    ):
+        # Talking: mouth opens and closes well within the 3s hold.
+        c.update(_frame(_absent(), _absent(), face=_face_facing(mouth_open=0.7)), now=0.0)
+        c.update(_frame(_absent(), _absent(), face=_face_facing(mouth_open=0.0)), now=0.5)
+        c.update(_frame(_absent(), _absent(), face=_face_facing(mouth_open=0.8)), now=1.0)
+        c.update(_frame(_absent(), _absent(), face=_face_facing(mouth_open=0.0)), now=1.5)
+        assert sp.call_count == 0
+
+
+def test_mouth_open_requires_close_before_refire():
+    c = DesktopController(mirrored=False)
+    with (
+        patch("handspring.desktop_controller.os_control.move_cursor"),
+        patch("handspring.desktop_controller.os_control.mouse_down"),
+        patch("handspring.desktop_controller.os_control.mouse_up"),
+        patch("handspring.desktop_controller.os_control.spotlight") as sp,
+    ):
+        face_open = _face_facing(mouth_open=0.8)
+        c.update(_frame(_absent(), _absent(), face=face_open), now=0.0)
+        c.update(_frame(_absent(), _absent(), face=face_open), now=3.1)
+        assert sp.call_count == 1
+        # Keep mouth open indefinitely — must not refire.
+        c.update(_frame(_absent(), _absent(), face=face_open), now=10.0)
+        assert sp.call_count == 1
+        # Close + reopen + hold → fires again.
+        c.update(_frame(_absent(), _absent(), face=_face_facing(mouth_open=0.0)), now=11.0)
+        c.update(_frame(_absent(), _absent(), face=face_open), now=12.0)
+        c.update(_frame(_absent(), _absent(), face=face_open), now=15.2)
+        assert sp.call_count == 2

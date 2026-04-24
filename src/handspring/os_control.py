@@ -259,6 +259,14 @@ def show_desktop() -> None:
     _run_script('tell application "System Events" to key code 103')
 
 
+def spotlight() -> None:
+    """Open Spotlight (Cmd+Space)."""
+    if not _MAC:
+        return
+    # keycode 49 = Space
+    _key_code(49, ["command down"])
+
+
 def switch_desktop(direction: str) -> None:
     """Page left/right between macOS Spaces (Ctrl+←/→)."""
     code = 123 if direction == "left" else 124  # 123=left, 124=right

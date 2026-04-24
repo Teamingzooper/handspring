@@ -170,6 +170,34 @@ peace_command      = ""    # empty = built-in show_desktop (F11); set to any
                            # shell command to override (e.g., "osascript -e 'tell app \"Spotify\" to playpause'")
 ```
 
+### Face gate — "am I still here?" safety net
+
+Hand gestures only fire when handspring can see your face and you're roughly looking at the screen. Turn to talk to someone, grab a coffee, or reach off-camera → cursor freezes, clicks suppress, radial won't open. Look back and you're live again within a single frame. A short grace period (20 frames, ~0.7s) prevents blinks or brief occlusions from kicking you out.
+
+Disable or tune it in `config.toml`:
+
+```toml
+[face]
+gate_gestures        = true   # set false to disable the gate entirely
+gate_yaw_tolerance   = 0.6    # max left/right head angle (0..1)
+gate_pitch_tolerance = 0.5    # max up/down head angle
+gate_grace_frames    = 20     # frames without face before suppression kicks in
+```
+
+If you run with `--no-face` (face tracking off), the gate is effectively disabled since there's no face data.
+
+### Mouth wide open — Spotlight
+
+Hold your mouth wide open for **3 seconds** → opens Spotlight (`Cmd+Space`). Handy when both hands are on a coffee or sandwich. Because it's a sustained pose, talking or yawning won't mis-fire. Close your mouth before it can fire again.
+
+```toml
+[face]
+mouth_open_threshold    = 0.55   # how wide "wide" means (0..1)
+mouth_open_hold_seconds = 3.0    # how long to hold
+mouth_open_command      = ""     # empty = Spotlight; otherwise any shell command
+                                 # (e.g., "open -a Raycast" for a different launcher)
+```
+
 ---
 
 ## Plash setup
