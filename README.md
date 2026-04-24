@@ -15,16 +15,17 @@ MediaPipe does the landmark extraction; everything downstream is pure Python. Ru
 
 1. [Install](#install)
 2. [Quick start](#quick-start)
-3. [Desktop mode: the radial menu](#desktop-mode-the-radial-menu)
-4. [Desktop mode: gestures](#desktop-mode-gestures)
-5. [Plash setup (camera as desktop background)](#plash-setup)
-6. [Synth mode](#synth-mode)
-7. [OSC streams](#osc-streams)
-8. [Customizing](#customizing)
-9. [CLI reference](#cli-reference)
-10. [Architecture](#architecture)
-11. [Use as a library](#use-as-a-library)
-12. [Troubleshooting](#troubleshooting)
+3. [First-run tutorial](#first-run-tutorial)
+4. [Desktop mode: the radial menu](#desktop-mode-the-radial-menu)
+5. [Desktop mode: gestures](#desktop-mode-gestures)
+6. [Plash setup (camera as desktop background)](#plash-setup)
+7. [Synth mode](#synth-mode)
+8. [OSC streams](#osc-streams)
+9. [Customizing](#customizing)
+10. [CLI reference](#cli-reference)
+11. [Architecture](#architecture)
+12. [Use as a library](#use-as-a-library)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -68,6 +69,27 @@ handspring-synth
 Make a fist with one hand → the synth panel in the preview's lower-left shows `EDIT L` or `EDIT R`. Point or open the other hand to edit parameters.
 
 Hit Ctrl+C in either terminal to quit.
+
+---
+
+## First-run tutorial
+
+The first time you run `python -m handspring` (i.e., before `~/.config/handspring/config.toml` exists), an interactive tutorial opens in the preview window. 7 steps, ~60–90 seconds. It walks you through:
+
+1. Showing your right hand.
+2. Pointing your right index.
+3. Moving the cursor around.
+4. Pinching the right hand.
+5. Pinching the left hand.
+6. Flicking the radial menu.
+7. Making a peace sign.
+
+Each step has a 30-second timeout. Press **Space** to skip the current step, **Esc** or **q** to skip everything. The tutorial measures your hand size during step 2 and scales `radial.flick_threshold` + `create.entry_distance` proportionally — bigger hands get roomier thresholds so you don't have to make tiny precise motions.
+
+Re-run anytime:
+- `python -m handspring --tutorial` → force-run (even if config exists).
+- Click **Replay tutorial** in the Settings UI → queues it for the next launch.
+- `python -m handspring --skip-tutorial` → never run (useful in scripts).
 
 ---
 
@@ -134,6 +156,19 @@ Minimum pixel size is 200×150 to avoid degenerate windows.
 ### Failsafe
 
 Hold **both fists** for 5 seconds → toggles gesture control off (or back on). While off, the cursor freezes where it was, no more clicks, no more radial. A red `GESTURES DISABLED` banner appears on the overlay. Hold both fists another 5s to re-enable.
+
+### Peace sign — show desktop
+
+Hold a peace sign (index + middle extended, ring + pinky curled) on either hand for **0.3 seconds** → triggers macOS **Show Desktop** (sends F11). Release to rearm — a single hold fires once, you must drop the pose before it can fire again. Respects the failsafe, so a disabled handspring won't trigger.
+
+Customize in `~/.config/handspring/config.toml`:
+
+```toml
+[gestures]
+peace_hold_seconds = 0.3   # seconds the pose must be held
+peace_command      = ""    # empty = built-in show_desktop (F11); set to any
+                           # shell command to override (e.g., "osascript -e 'tell app \"Spotify\" to playpause'")
+```
 
 ---
 
@@ -341,6 +376,8 @@ python -m handspring [options]
                            (default: ~/.config/handspring/config.toml)
   --no-overlay             disable the native always-on-top overlay
   --fps-log-interval S     console FPS readout interval (default: 0.5)
+  --skip-tutorial          skip the first-run tutorial
+  --tutorial               force-run the tutorial even if config exists
 ```
 
 ```
